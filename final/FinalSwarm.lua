@@ -1,116 +1,181 @@
 -- ============================================
--- GOD MODE + REMOTE HEAL (PLAYERSTATUS)
+-- GOD MODE ULTIMATE + REMOTE HEAL SPAM (CLIENT)
 -- ============================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
 local character, humanoid, rootPart
 local isGodMode = false
 local connections = {}
 local forceFields = {}
+local remoteList = {}  -- daftar remote yang akan dicoba
+
+-- ============================================
+-- [DAFTAR REMOTE YANG AKAN DICOBA]
+-- ============================================
+local function buildRemoteList()
+    remoteList = {}
+
+    local function addRemote(path, typeName)
+        local obj = ReplicatedStorage:FindFirstChild(path)
+        if not obj then
+            -- Coba cari di dalam Packages
+            local packages = ReplicatedStorage:FindFirstChild("Packages")
+            if packages then
+                local index = packages:FindFirstChild("_Index")
+                if index then
+                    local leif = index:FindFirstChild("leifstout_networker@0.3.0")
+                    if not leif then
+                        leif = index:FindFirstChild("leifstout_networker@0.2.1")
+                    end
+                    if leif then
+                        local net = leif:FindFirstChild("networker")
+                        if net then
+                            local remotes = net:FindFirstChild("_remotes")
+                            if remotes then
+                                local service = remotes:FindFirstChild(path)
+                                if service then
+                                    obj = service:FindFirstChild(typeName == "RemoteEvent" and "RemoteEvent" or "RemoteFunction")
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if obj then
+            table.insert(remoteList, obj)
+        end
+    end
+
+    -- PlayerStatus
+    addRemote("PlayerStatus", "RemoteEvent")
+    addRemote("PlayerStatus", "RemoteFunction")
+    -- PlayerRunData
+    addRemote("PlayerRunData", "RemoteEvent")
+    addRemote("PlayerRunData", "RemoteFunction")
+    -- GameService
+    addRemote("GameService", "RemoteEvent")
+    addRemote("GameService", "RemoteFunction")
+    -- WeaponService (mungkin ada heal)
+    addRemote("WeaponService", "RemoteEvent")
+    addRemote("WeaponService", "RemoteFunction")
+    -- EnemyService (mungkin ada damage control)
+    addRemote("EnemyService", "RemoteEvent")
+    addRemote("EnemyService", "RemoteFunction")
+    -- CollectableService
+    addRemote("CollectableService", "RemoteEvent")
+    addRemote("CollectableService", "RemoteFunction")
+    -- ChestService
+    addRemote("ChestService", "RemoteEvent")
+    addRemote("ChestService", "RemoteFunction")
+    -- PauseService (bisa pause game, mungkin menghentikan serangan)
+    addRemote("PauseService", "RemoteEvent")
+    addRemote("PauseService", "RemoteFunction")
+    -- MonetizationService (mungkin ada beli health)
+    addRemote("MonetizationService", "RemoteEvent")
+    addRemote("MonetizationService", "RemoteFunction")
+    -- TutorialService
+    addRemote("TutorialService", "RemoteEvent")
+    addRemote("TutorialService", "RemoteFunction")
+    -- Settings
+    addRemote("Settings", "RemoteEvent")
+    addRemote("Settings", "RemoteFunction")
+end
+
+buildRemoteList()
+
+-- ============================================
+-- [DAFTAR METHOD YANG AKAN DICOBA]
+-- ============================================
 local healMethods = {
+    -- Format umum heal
     {"Heal", 1e9},
-    {"SetHealth", 1e9},
-    {"ChangeHealth", 1e9},
-    {"RestoreHealth", 1e9},
+    {"Heal", "Full"},
     {"FullHeal"},
-    {"RegenHealth", 1e9},
+    {"RestoreHealth", 1e9},
+    {"RestoreHealth"},
     {"AddHealth", 1e9},
+    {"AddHP", 1e9},
+    {"SetHealth", 1e9},
+    {"SetHP", 1e9},
+    {"ChangeHealth", 1e9},
     {"UpdateHealth", 1e9},
+    {"RegenerateHealth", 1e9},
+    {"Regen", 1e9},
+    {"HealthRegen", 1e9},
+    {"RegenHealth", 1e9},
     {"SetMaxHealth", 1e9},
+    {"MaxHealth", 1e9},
+    {"IncreaseMaxHealth", 1e9},
     {"UpgradeHealth", 1e9},
     {"HealthBoost", 1e9},
-    {"IncreaseHealth", 1e9},
-    {"SetHP", 1e9},
+    {"BoostHealth", 1e9},
+    {"AddMaxHealth", 1e9},
     {"SetHealthPercentage", 100},
-    {"HealPlayer", 1e9},
-    {"HealCharacter", 1e9},
-    {"HealthRegen", 1e9},
-    {"Regen", 1e9},
+    {"HealthPercentage", 100},
+    {"SetHpPercentage", 100},
+    {"SetHealthPercent", 100},
+    -- Format data
+    {"Set", {Health = 1e9, MaxHealth = 1e9, HP = 1e9, hp = 1e9}},
+    {"Update", {Health = 1e9, MaxHealth = 1e9, HP = 1e9, hp = 1e9}},
+    {"Change", {Health = 1e9, MaxHealth = 1e9, HP = 1e9, hp = 1e9}},
+    {"Add", {Health = 1e9, MaxHealth = 1e9, HP = 1e9, hp = 1e9}},
+    {"SetData", {Health = 1e9, MaxHealth = 1e9, HP = 1e9, hp = 1e9}},
+    -- Format lain
+    {"Health", 1e9},
+    {"HP", 1e9},
+    {"hp", 1e9},
+    {"heal"},
+    {"heal", 1e9},
+    {"HealPlayer"},
+    {"HealCharacter"},
+    {"HealMe"},
+    {"RestoreFullHealth"},
+    {"Regenerate"},
+    {"RegenerateAll"},
+    {"RegenAll"},
+    {"FullRegen"},
+    {"Revive"},
+    {"Respawn"},
+    {"Rebirth"},
+    {"ResetHealth"},
+    {"ResetHP"},
 }
+
 local methodIndex = 1
-local lastRemoteAttempt = 0
-local remoteAttemptInterval = 1 -- detik antar percobaan remote
-
--- Cari remote PlayerStatus
-local playerStatusRemote
-local playerStatusFunction
-
-local function findRemote(name)
-    local container = ReplicatedStorage:FindFirstChild("Packages")
-    if container then
-        local networker = container:FindFirstChild("_Index")
-        if networker then
-            local leif = networker:FindFirstChild("leifstout_networker@0.3.0")
-            if leif then
-                local net = leif:FindFirstChild("networker")
-                if net then
-                    local remotes = net:FindFirstChild("_remotes")
-                    if remotes then
-                        local service = remotes:FindFirstChild(name)
-                        if service then
-                            return service:FindFirstChild("RemoteEvent"), service:FindFirstChild("RemoteFunction")
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return nil, nil
-end
-
-playerStatusRemote, playerStatusFunction = findRemote("PlayerStatus")
-
--- Jika tidak ketemu, coba versi 0.2.1
-if not playerStatusRemote then
-    local container = ReplicatedStorage:FindFirstChild("Packages")
-    if container then
-        local networker = container:FindFirstChild("_Index")
-        if networker then
-            local leif = networker:FindFirstChild("leifstout_networker@0.2.1")
-            if leif then
-                local net = leif:FindFirstChild("networker")
-                if net then
-                    local remotes = net:FindFirstChild("_remotes")
-                    if remotes then
-                        local service = remotes:FindFirstChild("PlayerStatus")
-                        if service then
-                            playerStatusRemote = service:FindFirstChild("RemoteEvent")
-                            playerStatusFunction = service:FindFirstChild("RemoteFunction")
-                        end
-                    end
-                end
-            end
-        end
-    end
-end
-
-print("PlayerStatus RemoteEvent:", playerStatusRemote)
-print("PlayerStatus RemoteFunction:", playerStatusFunction)
+local remoteIndex = 1
+local lastAttempt = 0
+local attemptInterval = 0.1 -- detik antar percobaan (cukup agresif)
 
 -- ============================================
--- [FUNGSI HEAL VIA REMOTE]
+-- [FUNGSI COBA REMOTE HEAL]
 -- ============================================
 local function tryRemoteHeal()
-    if not playerStatusRemote and not playerStatusFunction then return end
-    if not humanoid or not humanoid.Parent then return end
-    if tick() - lastRemoteAttempt < remoteAttemptInterval then return end
-    lastRemoteAttempt = tick()
+    if #remoteList == 0 or #healMethods == 0 then return end
+    if tick() - lastAttempt < attemptInterval then return end
+    lastAttempt = tick()
 
+    local remote = remoteList[remoteIndex]
     local args = healMethods[methodIndex]
-    methodIndex = methodIndex % #healMethods + 1
 
-    if playerStatusRemote then
-        pcall(function()
-            playerStatusRemote:FireServer(unpack(args))
-        end)
+    -- Pindah ke method berikutnya untuk percobaan selanjutnya
+    methodIndex = methodIndex % #healMethods + 1
+    -- Pindah ke remote berikutnya setelah semua method dicoba
+    if methodIndex == 1 then
+        remoteIndex = remoteIndex % #remoteList + 1
     end
 
-    if playerStatusFunction then
+    if remote then
         pcall(function()
-            playerStatusFunction:InvokeServer(unpack(args))
+            if remote:IsA("RemoteEvent") then
+                remote:FireServer(unpack(args))
+            elseif remote:IsA("RemoteFunction") then
+                remote:InvokeServer(unpack(args))
+            end
         end)
     end
 end
@@ -121,13 +186,13 @@ end
 local function ApplyGodMode()
     if not character or not humanoid or not rootPart then return end
 
-    -- Matikan koneksi lama
+    -- Bersihkan koneksi lama
     for _, conn in ipairs(connections) do
         pcall(function() conn:Disconnect() end)
     end
     connections = {}
 
-    -- Set health lokal
+    -- Set health awal
     pcall(function()
         humanoid.MaxHealth = 1e9
         humanoid.Health = 1e9
@@ -160,7 +225,7 @@ local function ApplyGodMode()
     end)
 
     -- ForceField bertumpuk
-    for i = 1, 5 do
+    for i = 1, 10 do
         local ff = Instance.new("ForceField")
         ff.Name = "GodShield_" .. i
         ff.Visible = false
@@ -183,10 +248,11 @@ local function ApplyGodMode()
         rootPart.CFrame = CFrame.new(rootPart.Position.X, minY + 50, rootPart.Position.Z)
     end
 
-    -- Auto respawn kalau mati
+    -- Auto respawn super cepat jika mati
     local diedConn = humanoid.Died:Connect(function()
         if isGodMode then
-            task.wait(0.1)
+            -- Langsung respawn dalam 0.05 detik
+            task.wait(0.05)
             pcall(function()
                 player:LoadCharacter()
             end)
@@ -197,14 +263,14 @@ local function ApplyGodMode()
     -- Loop utama
     local heartbeatLoop = RunService.Heartbeat:Connect(function()
         if isGodMode and humanoid and humanoid.Parent then
-            -- Set health lokal terus
+            -- Paksa health tetap tinggi
             if humanoid.Health < 1e9 then
                 humanoid.Health = 1e9
             end
             if humanoid.MaxHealth ~= 1e9 then
                 humanoid.MaxHealth = 1e9
             end
-            -- Coba remote heal secara periodik
+            -- Coba remote heal
             tryRemoteHeal()
         end
     end)
@@ -265,15 +331,16 @@ end
 player.CharacterAdded:Connect(OnCharacterAdded)
 
 -- ============================================
--- [GUI]
+-- [GUI TOMBOL]
 -- ============================================
 local screenGui = Instance.new("ScreenGui")
 local frame = Instance.new("Frame")
 local btn = Instance.new("TextButton")
+local status = Instance.new("TextLabel")
 
 screenGui.Parent = player:WaitForChild("PlayerGui")
 frame.Parent = screenGui
-frame.Size = UDim2.new(0, 220, 0, 60)
+frame.Size = UDim2.new(0, 250, 0, 90)
 frame.Position = UDim2.new(0, 20, 0, 20)
 frame.BackgroundColor3 = Color3.fromRGB(20, 20, 35)
 frame.BackgroundTransparency = 0.15
@@ -286,19 +353,29 @@ btn.Text = "🛡️ GOD MODE: OFF"
 btn.TextColor3 = Color3.fromRGB(255,255,255)
 btn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
 
+status.Parent = frame
+status.Size = UDim2.new(1, -20, 0, 25)
+status.Position = UDim2.new(0, 10, 0, 55)
+status.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+status.Text = "Remote heal: standby"
+status.TextColor3 = Color3.fromRGB(255,255,255)
+status.Font = Enum.Font.SourceSans
+status.TextSize = 12
+
 btn.MouseButton1Click:Connect(function()
     isGodMode = not isGodMode
     if isGodMode then
-        btn.Text = "🛡️ GOD MODE: ON (REMOTE HEAL)"
+        btn.Text = "🛡️ GOD MODE: ON (ULTIMATE)"
         btn.BackgroundColor3 = Color3.fromRGB(40, 120, 40)
         ApplyGodMode()
+        status.Text = "Remote heal: aktif, mencoba semua method..."
     else
         btn.Text = "🛡️ GOD MODE: OFF"
         btn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
         RemoveGodMode()
+        status.Text = "Remote heal: off"
     end
 end)
 
-print("✅ Script God Mode + Remote Heal aktif!")
-print("💡 Script ini mencoba memanggil PlayerStatus remote dengan berbagai metode heal.")
-print("⚠️ Jika masih mati, coba ganti daftar metode di 'healMethods' atau gunakan server script.")
+print("✅ Script God Mode Ultimate aktif!")
+print("💡 Jika masih mati, server memang full authoritative. Gunakan server script untuk hasil 100%.")
