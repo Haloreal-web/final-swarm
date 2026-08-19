@@ -1,265 +1,132 @@
 -- ============================================================
--- 🛡️ AUTO DODGE ULTIMATE — HINDARI SEMUA OBJEK
+-- 🤝 AUTO FOLLOW PLAYER — NEMPEL BANGET (FIXED v2)
 -- ============================================================
--- ✅ Hindari semua objek bergerak (proyektil, musuh, player, kendaraan)
--- ✅ Deteksi proyektil berdasarkan kecepatan
--- ✅ Hindari musuh jarak dekat
--- ✅ Opsi toggle: Hindari Player (ON/OFF)
--- ✅ Lompat + dash + zig-zag
--- ============================================================
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
-local TweenService = game:GetService("TweenService")
 
-local player = Players.LocalPlayer
+-- Pastikan LocalPlayer sudah ada (script bisa jalan terlalu awal)
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
 local char, hum, root
+local targetChar, targetHum, targetRoot
 
-local dodgeOn = false
-local avoidPlayers = true   -- ← toggle ini di GUI
-local lastDodgeTime = 0
-local dodgeDir = 1
-local isDodging = false
-local bodyVelocity = nil
+local followOn = false
+local followDistance = 3 -- jarak offset di belakang target (stud)
 
--- ============================================================
--- ⚙️ KONFIGURASI
--- ============================================================
-local CONFIG = {
-    DodgeMode = "Defensive",  -- "Defensive" / "Aggressive"
-    ScanRadius = 50,
-    ProjSpeedThreshold = 12,
-    ProjPredictionTime = 0.35,
-    DangerDistProj = 20,
-    DangerDistEnemy = 9,
-    DangerDistPlayer = 6,     -- Jarak aman dari player lain
-    DodgeCooldown = 0.12,
-    DashDistance = 5,
-    UseBodyVelocity = true,
-    ShowDebug = false,
-}
+local targetPlayer = nil
+local targetList = {}
+local targetIndex = 0
 
--- ============================================================
--- 🔄 UPDATE KARAKTER
--- ============================================================
-local function updateChar()
-    char = player.Character
-    if char then
-        hum = char:FindFirstChildOfClass("Humanoid")
-        root = char:FindFirstChild("HumanoidRootPart")
-        if CONFIG.UseBodyVelocity and root then
-            bodyVelocity = Instance.new("BodyVelocity")
-            bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
-            bodyVelocity.Velocity = Vector3.zero
-            bodyVelocity.Parent = root
-        end
+-- BUG FIX: cek Parent DAN Health, supaya karakter yang sudah mati
+-- (tapi belum di-destroy/parent belum nil) tidak dianggap "alive".
+local function isAlive(obj)
+    if not obj or obj.Parent == nil then
+        return false
     end
-end
-updateChar()
-player.CharacterAdded:Connect(updateChar)
-
--- ============================================================
--- 🔍 CEK APAKAH OBJEK ADALAH MUSUH / PLAYER / OBJEK BERBAHAYA
--- ============================================================
-local function isThreat(obj)
-    if not obj or not obj:IsA("Model") then return false end
-    
-    -- Cek apakah objek adalah player
-    local isPlayer = Players:GetPlayerFromCharacter(obj)
-    if isPlayer then
-        -- Jangan hindari diri sendiri
-        if isPlayer == player then return false end
-        return avoidPlayers  -- True jika toggle ON
+    if obj:IsA("Humanoid") then
+        return obj.Health > 0
     end
-
-    -- Cek apakah objek memiliki Humanoid (musuh)
-    local h = obj:FindFirstChildOfClass("Humanoid")
-    if h and h.Health > 0 then
-        return true
-    end
-
-    return false
+    return true
 end
 
--- ============================================================
--- 🎯 DETEKSI PROYEKTIL (SEMUA PARTIKEL BERKECEPATAN TINGGI)
--- ============================================================
-local function getProjectileThreats()
-    if not root then return {} end
-    local myPos = root.Position
-    local threats = {}
-
-    for _, part in ipairs(Workspace:GetDescendants()) do
-        if part:IsA("BasePart") and part.Parent ~= char then
-            local vel = part.AssemblyLinearVelocity
-            if vel and vel.Magnitude > CONFIG.ProjSpeedThreshold then
-                local dist = (myPos - part.Position).Magnitude
-                if dist < CONFIG.ScanRadius then
-                    local futurePos = part.Position + vel * CONFIG.ProjPredictionTime
-                    local distToFuture = (myPos - futurePos).Magnitude
-                    local dir = (part.Position - myPos).Unit
-                    local dot = dir:Dot(vel.Unit)
-                    if dot < 0 and distToFuture < CONFIG.DangerDistProj then
-                        table.insert(threats, {
-                            Part = part,
-                            Position = part.Position,
-                            FuturePos = futurePos,
-                            Distance = dist,
-                            Velocity = vel,
-                            TimeToImpact = dist / vel.Magnitude
-                        })
-                    end
-                end
-            end
-        end
+-- BUG FIX: HumanoidRootPart & Humanoid belum tentu langsung ada
+-- saat CharacterAdded fire (masih proses loading). Pakai WaitForChild
+-- dengan timeout supaya tidak dapat nil di frame pertama.
+local function updateSelf(newChar)
+    char = newChar or player.Character
+    if not char then
+        hum, root = nil, nil
+        return
     end
 
-    table.sort(threats, function(a, b)
-        return (a.TimeToImpact or 999) < (b.TimeToImpact or 999)
-    end)
+    hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+    root = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 5)
 
-    return threats
-end
-
--- ============================================================
--- 👾 DETEKSI OBJEK BERGERAK (MUSUH, PLAYER, KENDARAAN)
--- ============================================================
-local function getMovingThreats()
-    if not root then return {} end
-    local myPos = root.Position
-    local threats = {}
-
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj ~= char then
-            -- Cek apakah objek adalah player atau musuh
-            if isThreat(obj) then
-                local hrp = obj:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local dist = (myPos - hrp.Position).Magnitude
-                    local isPlayer = Players:GetPlayerFromCharacter(obj)
-                    local dangerDist = isPlayer and CONFIG.DangerDistPlayer or CONFIG.DangerDistEnemy
-                    if dist < dangerDist then
-                        table.insert(threats, {
-                            Object = obj,
-                            Position = hrp.Position,
-                            Distance = dist,
-                            Type = isPlayer and "Player" or "Enemy"
-                        })
-                    end
-                end
-            end
-        end
-    end
-
-    -- Deteksi AOE (ledakan, area damage)
-    for _, part in ipairs(Workspace:GetDescendants()) do
-        if part:IsA("BasePart") and (part.Name:lower():find("explosion") or part.Name:lower():find("aoe") or part.Name:lower():find("fire")) then
-            local dist = (myPos - part.Position).Magnitude
-            if dist < 12 then
-                table.insert(threats, {
-                    Object = part,
-                    Position = part.Position,
-                    Distance = dist,
-                    Type = "AOE"
-                })
-            end
-        end
-    end
-
-    return threats
-end
-
--- ============================================================
--- 🚀 EKSEKUSI DODGE
--- ============================================================
-local function performDodge(avoidPos, threatType)
-    if not hum or not root then return end
-    if isDodging then return end
-    if tick() - lastDodgeTime < CONFIG.DodgeCooldown then return end
-
-    isDodging = true
-    local myPos = root.Position
-    local dirAway = (myPos - avoidPos).Unit
-    if dirAway.Magnitude < 0.1 then dirAway = Vector3.new(0, 0, 1) end
-
-    local right = Vector3.new(0, 1, 0):Cross(dirAway).Unit
-    if right.Magnitude < 0.1 then right = Vector3.new(1, 0, 0) end
-
-    dodgeDir = dodgeDir * -1
-    local sideDir = right * dodgeDir
-
-    local moveDir
-    if CONFIG.DodgeMode == "Defensive" then
-        moveDir = (dirAway * -0.4 + sideDir * 0.6).Unit
-    else
-        moveDir = (sideDir * 0.8 + dirAway * 0.2).Unit
-    end
-
-    hum.Jump = true
-    task.wait(0.05)
-    hum.Jump = false
-
-    local dashTarget = myPos + moveDir * CONFIG.DashDistance
-    hum:MoveTo(dashTarget)
-
-    if CONFIG.UseBodyVelocity and bodyVelocity then
-        bodyVelocity.Velocity = moveDir * 35
-        task.spawn(function()
-            task.wait(0.2)
-            if bodyVelocity then bodyVelocity.Velocity = Vector3.zero end
-        end)
-    end
-
-    task.spawn(function()
-        task.wait(0.25)
-        isDodging = false
-        if hum then hum:Move(Vector3.zero, false) end
-    end)
-
-    lastDodgeTime = tick()
-    if CONFIG.ShowDebug then
-        print("🔄 Dodge: " .. threatType)
+    if not isAlive(char) then
+        char, hum, root = nil, nil, nil
     end
 end
 
--- ============================================================
--- 🧠 LOOP UTAMA
--- ============================================================
-local function processThreats()
-    if not dodgeOn then return end
-    if not root or not hum then return end
+local function updateTarget()
+    targetChar, targetHum, targetRoot = nil, nil, nil
+    if not targetPlayer then return end
 
-    -- 1. Proyektil (prioritas tertinggi)
-    local projThreats = getProjectileThreats()
-    if #projThreats > 0 then
-        local top = projThreats[1]
-        if top.Distance < CONFIG.DangerDistProj then
-            performDodge(top.Position, "Projectile")
-            return
-        end
+    local plr = Players:FindFirstChild(targetPlayer)
+    if not plr then
+        -- BUG FIX: target sudah leave game -> reset supaya UI tidak
+        -- terus2an menampilkan nama player yang sudah tidak ada
+        targetPlayer = nil
+        return
     end
 
-    -- 2. Objek bergerak (musuh, player, AOE)
-    local threats = getMovingThreats()
-    for _, t in ipairs(threats) do
-        if t.Distance < (t.Type == "Player" and CONFIG.DangerDistPlayer or CONFIG.DangerDistEnemy) then
-            performDodge(t.Position, t.Type)
-            return
+    if plr and isAlive(plr.Character) then
+        targetChar = plr.Character
+        targetHum = targetChar:FindFirstChildOfClass("Humanoid")
+        targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+    end
+end
+
+local function refreshTargetList()
+    targetList = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player then
+            table.insert(targetList, plr.Name)
         end
     end
 end
 
-RunService.Heartbeat:Connect(processThreats)
+updateSelf()
+player.CharacterAdded:Connect(function(newChar)
+    updateSelf(newChar)
+end)
 
 -- ============================================================
--- 🖥️ GUI — dengan tombol toggle "Hindari Player"
+-- LOOP UTAMA FOLLOW
+-- ============================================================
+RunService.Heartbeat:Connect(function()
+    if not followOn then return end
+
+    if not isAlive(char) or not isAlive(root) or not isAlive(hum) then
+        updateSelf()
+        if not isAlive(root) or not isAlive(hum) then return end
+    end
+
+    updateTarget()
+    if not isAlive(targetRoot) or not isAlive(targetHum) then return end
+
+    -- Posisi ideal: di belakang target sejauh followDistance
+    local look = targetRoot.CFrame.LookVector
+    local desiredPos = targetRoot.Position - (look * followDistance)
+    local distToDesired = (root.Position - desiredPos).Magnitude
+
+    if distToDesired > 1 then
+        hum:MoveTo(desiredPos)
+    end
+
+    -- Ikut lompat hanya kalau target lompat & kita di tanah
+    if targetHum:GetState() == Enum.HumanoidStateType.Jumping then
+        if hum.FloorMaterial ~= Enum.Material.Air and hum:GetState() ~= Enum.HumanoidStateType.Jumping then
+            hum.Jump = true
+        end
+    end
+
+    -- Samakan kecepatan jalan target
+    if targetHum.WalkSpeed ~= hum.WalkSpeed then
+        hum.WalkSpeed = targetHum.WalkSpeed
+    end
+end)
+
+-- ============================================================
+-- 🖥️ GUI PILIH TARGET (klik untuk cycle player)
 -- ============================================================
 local gui = Instance.new("ScreenGui")
+-- BUG FIX: tanpa ini, GUI akan otomatis dihapus setiap kali karakter
+-- respawn (default ResetOnSpawn = true), sehingga tombol hilang setelah mati.
+gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 240, 0, 150)
+frame.Size = UDim2.new(0, 240, 0, 130)
 frame.Position = UDim2.new(0, 10, 0, 10)
 frame.BackgroundColor3 = Color3.fromRGB(20, 20, 35)
 frame.BorderSizePixel = 0
@@ -268,62 +135,102 @@ frame.Parent = gui
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 20)
 title.BackgroundTransparency = 1
-title.Text = "🛡️ DODGE ULTIMATE"
-title.TextColor3 = Color3.fromRGB(255,255,255)
+title.Text = "🎯 FOLLOW PLAYER"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.SourceSansBold
 title.TextSize = 14
 title.Parent = frame
 
--- Tombol Dodge
-local btnDodge = Instance.new("TextButton")
-btnDodge.Size = UDim2.new(1, -20, 0, 30)
-btnDodge.Position = UDim2.new(0, 10, 0, 25)
-btnDodge.Text = "DODGE: OFF"
-btnDodge.TextColor3 = Color3.fromRGB(255,255,255)
-btnDodge.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
-btnDodge.BorderSizePixel = 0
-btnDodge.Parent = frame
+local btnFollow = Instance.new("TextButton")
+btnFollow.Size = UDim2.new(1, -20, 0, 32)
+btnFollow.Position = UDim2.new(0, 10, 0, 25)
+btnFollow.Text = "FOLLOW: OFF"
+btnFollow.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnFollow.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+btnFollow.BorderSizePixel = 0
+btnFollow.Parent = frame
 
--- Tombol Mode
-local btnMode = Instance.new("TextButton")
-btnMode.Size = UDim2.new(1, -20, 0, 30)
-btnMode.Position = UDim2.new(0, 10, 0, 60)
-btnMode.Text = "MODE: Defensive"
-btnMode.TextColor3 = Color3.fromRGB(255,255,255)
-btnMode.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
-btnMode.BorderSizePixel = 0
-btnMode.Parent = frame
+local btnTarget = Instance.new("TextButton")
+btnTarget.Size = UDim2.new(1, -20, 0, 32)
+btnTarget.Position = UDim2.new(0, 10, 0, 62)
+btnTarget.Text = "TARGET: Pilih Player"
+btnTarget.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnTarget.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+btnTarget.BorderSizePixel = 0
+btnTarget.Parent = frame
 
--- Tombol Hindari Player (toggle)
-local btnPlayer = Instance.new("TextButton")
-btnPlayer.Size = UDim2.new(1, -20, 0, 30)
-btnPlayer.Position = UDim2.new(0, 10, 0, 95)
-btnPlayer.Text = "HINDARI PLAYER: ON"
-btnPlayer.TextColor3 = Color3.fromRGB(255,255,255)
-btnPlayer.BackgroundColor3 = Color3.fromRGB(40, 120, 60)
-btnPlayer.BorderSizePixel = 0
-btnPlayer.Parent = frame
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, 0, 0, 20)
+statusLabel.Position = UDim2.new(0, 0, 0, 100)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Belum ada target"
+statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+statusLabel.Font = Enum.Font.SourceSans
+statusLabel.TextSize = 12
+statusLabel.Parent = frame
 
--- Event tombol
-btnDodge.MouseButton1Click:Connect(function()
-    dodgeOn = not dodgeOn
-    btnDodge.Text = dodgeOn and "DODGE: ON" or "DODGE: OFF"
-    btnDodge.BackgroundColor3 = dodgeOn and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(50, 50, 70)
-    print(dodgeOn and "✅ Dodge aktif!" or "⏹ Dodge mati.")
+btnFollow.MouseButton1Click:Connect(function()
+    followOn = not followOn
+
+    if followOn and not targetPlayer then
+        followOn = false
+        statusLabel.Text = "Pilih target dulu!"
+    else
+        statusLabel.Text = followOn and ("Mengikuti: " .. targetPlayer) or "Follow dimatikan"
+    end
+
+    btnFollow.Text = followOn and "FOLLOW: ON" or "FOLLOW: OFF"
+    btnFollow.BackgroundColor3 = followOn and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(50, 50, 70)
 end)
 
-btnMode.MouseButton1Click:Connect(function()
-    CONFIG.DodgeMode = (CONFIG.DodgeMode == "Defensive") and "Aggressive" or "Defensive"
-    btnMode.Text = "MODE: " .. CONFIG.DodgeMode
-    btnMode.BackgroundColor3 = (CONFIG.DodgeMode == "Defensive") and Color3.fromRGB(50, 50, 70) or Color3.fromRGB(70, 50, 30)
-    print("🔄 Mode: " .. CONFIG.DodgeMode)
+btnTarget.MouseButton1Click:Connect(function()
+    refreshTargetList()
+
+    if #targetList == 0 then
+        targetPlayer = nil
+        targetChar, targetHum, targetRoot = nil, nil, nil
+        btnTarget.Text = "TARGET: Tidak ada player"
+        statusLabel.Text = "Tidak ada player lain"
+        -- BUG FIX: kalau follow lagi nyala tapi tidak ada target lagi,
+        -- matikan follow supaya UI dan state konsisten.
+        if followOn then
+            followOn = false
+            btnFollow.Text = "FOLLOW: OFF"
+            btnFollow.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+        end
+        return
+    end
+
+    -- Cari index target saat ini di daftar
+    local currentIndex = 0
+    if targetPlayer then
+        for i, name in ipairs(targetList) do
+            if name == targetPlayer then
+                currentIndex = i
+                break
+            end
+        end
+    end
+
+    -- Pilih player berikutnya
+    targetIndex = (currentIndex % #targetList) + 1
+    targetPlayer = targetList[targetIndex]
+
+    updateTarget()
+    btnTarget.Text = "TARGET: " .. targetPlayer
+    statusLabel.Text = (followOn and "Mengikuti: " or "Target: ") .. targetPlayer
 end)
 
-btnPlayer.MouseButton1Click:Connect(function()
-    avoidPlayers = not avoidPlayers
-    btnPlayer.Text = "HINDARI PLAYER: " .. (avoidPlayers and "ON" or "OFF")
-    btnPlayer.BackgroundColor3 = avoidPlayers and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(50, 50, 70)
-    print(avoidPlayers and "✅ Akan menghindari player lain" or "⏹ Player lain diabaikan")
+-- BUG FIX: kalau target keluar game saat followOn aktif, UI tetap
+-- menunjukkan nama lama. Loop kecil ini menjaga label tetap akurat.
+RunService.Heartbeat:Connect(function()
+    if followOn and not targetPlayer then
+        followOn = false
+        btnFollow.Text = "FOLLOW: OFF"
+        btnFollow.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+        btnTarget.Text = "TARGET: Pilih Player"
+        statusLabel.Text = "Target keluar game, follow dimatikan"
+    end
 end)
 
-print("✅ Script siap! Nyalakan DODGE, atur toggle 'Hindari Player' sesuai keinginan.")
+print("✅ Script Auto Follow siap! Klik TARGET untuk ganti player, lalu nyalakan FOLLOW.")
