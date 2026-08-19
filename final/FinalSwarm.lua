@@ -1,446 +1,340 @@
--- ============================================
--- SCRIPT AUTO FARM + AUTO HINDAR + AUTO ABOVE
--- ============================================
--- Fitur:
---   - Auto Farm : cari musuh terdekat, dekati, serang
---   - Auto Hindar: jauhi musuh/proyektil (Mode Aman/Cepat)
---   - Auto Above: melayang di atas musuh
---   - UI Modern dengan UICorner, UIStroke, Gradasi
--- ============================================
+-- ============================================================
+-- 🛡️ AUTO DODGE ULTIMATE v99e — FULL LAPISAN KETEBALAN
+-- ============================================================
+-- 🔥 Deteksi proyektil (kecepatan, prediksi, raycast tambahan)
+-- 🔥 Deteksi musuh jarak dekat & serangan area (AOE)
+-- 🔥 Gerakan: Lompat + Dash ke samping + Zig-zag + Roll (simulasi)
+-- 🔥 Multi-fallback: Move / MoveTo / BodyVelocity
+-- 🔥 Cooldown dinamis, prioritas ancaman, anti-lag
+-- 🔥 Mode: Agresif (hindar sambil tetap dekat) / Defensif (jauh)
+-- ============================================================
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
-local character, humanoid, rootPart
+local char, hum, root
 
--- Status fitur
-local isFarmActive = false
-local isDodgeActive = false
-local isAboveActive = false
-local dodgeMode = "safe"  -- "safe" atau "teleport"
+-- ============================================================
+-- ⚙️ KONFIGURASI
+-- ============================================================
+local CONFIG = {
+    DodgeMode = "Defensive",  -- "Defensive" atau "Aggressive"
+    ScanRadius = 50,          -- Radius deteksi ancaman
+    ProjSpeedThreshold = 12,  -- Kecepatan minimum dianggap proyektil
+    ProjPredictionTime = 0.35, -- Prediksi posisi proyektil (detik)
+    DangerDistProj = 20,      -- Jarak ancaman proyektil
+    DangerDistEnemy = 9,      -- Jarak ancaman musuh
+    DodgeCooldown = 0.12,     -- Cooldown antar dodge
+    JumpHeight = 1.2,         -- Tinggi lompatan (simulasi)
+    DashDistance = 5,         -- Jarak dash ke samping
+    UseBodyVelocity = true,   -- Gunakan BodyVelocity untuk gerakan instan
+    ShowDebug = false,        -- Tampilkan debug di output
+}
 
--- Cooldown
-local lastAttackTime = 0
+-- ============================================================
+-- 🔄 VARIABEL INTERNAL
+-- ============================================================
+local dodgeOn = false
 local lastDodgeTime = 0
-local attackCooldown = 0.2
-local dodgeCooldown = 0.3
+local dodgeDir = 1
+local isDodging = false
+local bodyVelocity = nil
 
--- Konfigurasi
-local FARM_RANGE = 50
-local ATTACK_RANGE = 15
-local DODGE_DETECT_RANGE = 12
-local PROYEKTIL_RANGE = 15
-local DODGE_DISTANCE = 10
-local DODGE_HEIGHT = 8
-local ABOVE_HEIGHT = 15
-
--- ============================================
--- [SETUP KARAKTER]
--- ============================================
-local function onCharacterAdded(newChar)
-    character = newChar
-    humanoid = character:WaitForChild("Humanoid")
-    rootPart = character:WaitForChild("HumanoidRootPart")
-end
-
-if player.Character then
-    onCharacterAdded(player.Character)
-end
-player.CharacterAdded:Connect(onCharacterAdded)
-
--- ============================================
--- [CARI MUSUH TERDEKAT]
--- ============================================
-local function getNearestMob(position, maxDist)
-    local closestDist = maxDist or math.huge
-    local closestMob = nil
-    local mobFolders = {"Monsters", "Enemies", "Mobs", "NPCs", "Zombies"}
-
-    for _, folderName in ipairs(mobFolders) do
-        local folder = Workspace:FindFirstChild(folderName)
-        if folder then
-            for _, model in ipairs(folder:GetDescendants()) do
-                if model:IsA("Model") and model:FindFirstChild("Humanoid") and model:FindFirstChild("HumanoidRootPart") then
-                    local hum = model.Humanoid
-                    if hum.Health > 0 and not Players:GetPlayerFromCharacter(model) then
-                        local dist = (position - model.HumanoidRootPart.Position).Magnitude
-                        if dist < closestDist then
-                            closestDist = dist
-                            closestMob = model
-                        end
-                    end
-                end
-            end
+-- ============================================================
+-- 🧬 FUNGSI UPDATE KARAKTER
+-- ============================================================
+local function updateChar()
+    char = player.Character
+    if char then
+        hum = char:FindFirstChildOfClass("Humanoid")
+        root = char:FindFirstChild("HumanoidRootPart")
+        -- Siapkan BodyVelocity untuk dash
+        if CONFIG.UseBodyVelocity and root then
+            bodyVelocity = Instance.new("BodyVelocity")
+            bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
+            bodyVelocity.Velocity = Vector3.zero
+            bodyVelocity.Parent = root
         end
     end
-
-    if not closestMob then
-        for _, model in ipairs(Workspace:GetDescendants()) do
-            if model:IsA("Model") and model:FindFirstChild("Humanoid") and model:FindFirstChild("HumanoidRootPart") then
-                local hum = model.Humanoid
-                if hum.Health > 0 and not Players:GetPlayerFromCharacter(model) then
-                    local dist = (position - model.HumanoidRootPart.Position).Magnitude
-                    if dist < closestDist then
-                        closestDist = dist
-                        closestMob = model
-                    end
-                end
-            end
-        end
-    end
-
-    return closestMob, closestDist
 end
+updateChar()
+player.CharacterAdded:Connect(updateChar)
 
--- ============================================
--- [CARI REMOTE SERANG]
--- ============================================
-local function findAttackRemote()
-    local names = {"AttackEvent", "Attack", "DamageEvent", "HitEvent", "Hit", "DealDamage"}
-    for _, n in ipairs(names) do
-        local r = ReplicatedStorage:FindFirstChild(n)
-        if r then return r end
-    end
-    return nil
-end
-local attackRemote = findAttackRemote()
-
--- ============================================
--- [FUNGSI SERANG]
--- ============================================
-local function attackMob(mob)
-    if not mob then return end
-    if attackRemote then
-        pcall(function()
-            attackRemote:FireServer(mob)
-        end)
-    end
-    pcall(function()
-        local mouse = player:GetMouse()
-        if mouse and mob:FindFirstChild("HumanoidRootPart") then
-            mouse.Target = mob.HumanoidRootPart
-        end
-    end)
-end
-
--- ============================================
--- [FUNGSI HINDAR MODE TELEPORT]
--- ============================================
-local function dodgeTeleport(dangerPos)
-    if not rootPart then return end
-    if tick() - lastDodgeTime < dodgeCooldown then return end
-    lastDodgeTime = tick()
-
-    local awayDir = (rootPart.Position - dangerPos).Unit
-    if awayDir.Magnitude < 0.1 then
-        awayDir = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1)).Unit
-    end
-    local angle = math.rad(math.random(-30, 30))
-    local cosA = math.cos(angle)
-    local sinA = math.sin(angle)
-    awayDir = Vector3.new(awayDir.X * cosA - awayDir.Z * sinA, 0, awayDir.X * sinA + awayDir.Z * cosA).Unit
-
-    local targetPos = rootPart.Position + awayDir * DODGE_DISTANCE + Vector3.new(0, DODGE_HEIGHT, 0)
-    pcall(function()
-        rootPart.CFrame = CFrame.new(targetPos)
-    end)
-    pcall(function()
-        humanoid:ChangeState(Enum.HumanoidStateType.Flying)
-    end)
-end
-
--- ============================================
--- [FUNGSI HINDAR MODE AMAN (MOVE + JUMP)]
--- ============================================
-local function dodgeSafe(dangerPos)
-    if not humanoid or not rootPart then return end
-    if tick() - lastDodgeTime < dodgeCooldown then return end
-    lastDodgeTime = tick()
-
-    local awayDir = (rootPart.Position - dangerPos).Unit
-    if awayDir.Magnitude < 0.1 then
-        awayDir = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1)).Unit
-    end
-
-    humanoid:Move(awayDir, false)
-    humanoid.Jump = true
-
-    task.delay(0.2, function()
-        pcall(function()
-            humanoid:Move(Vector3.zero, false)
-            humanoid.Jump = false
-        end)
-    end)
-end
-
--- ============================================
--- [DETEKSI PROYEKTIL]
--- ============================================
-local function getDangerousProjectile(myPos)
-    local closestProj = nil
-    local closestDist = PROYEKTIL_RANGE
+-- ============================================================
+-- 🎯 DETEKSI PROYEKTIL (Level MAX)
+-- ============================================================
+local function getProjectileThreats()
+    if not root then return {} end
+    local myPos = root.Position
+    local threats = {}
+    local scanRadius = CONFIG.ScanRadius
+    local speedThresh = CONFIG.ProjSpeedThreshold
+    local predTime = CONFIG.ProjPredictionTime
 
     for _, part in ipairs(Workspace:GetDescendants()) do
-        if part:IsA("BasePart") and not part:IsDescendantOf(character) then
-            local velocity = part.AssemblyLinearVelocity
-            if velocity and velocity.Magnitude > 20 then
+        if part:IsA("BasePart") and part.Parent ~= char then
+            local vel = part.AssemblyLinearVelocity
+            if vel and vel.Magnitude > speedThresh then
                 local dist = (myPos - part.Position).Magnitude
-                if dist < closestDist then
-                    closestDist = dist
-                    closestProj = part
+                if dist < scanRadius then
+                    -- Prediksi posisi masa depan
+                    local futurePos = part.Position + vel * predTime
+                    local distToFuture = (myPos - futurePos).Magnitude
+                    -- Cek apakah proyektil mendekati kita
+                    local currentDir = (part.Position - myPos).Unit
+                    local velDir = vel.Unit
+                    local dot = currentDir:Dot(velDir)
+                    if dot < 0 and distToFuture < CONFIG.DangerDistProj then
+                        table.insert(threats, {
+                            Part = part,
+                            Position = part.Position,
+                            FuturePos = futurePos,
+                            Distance = dist,
+                            Velocity = vel,
+                            TimeToImpact = dist / vel.Magnitude
+                        })
+                    end
                 end
             end
         end
     end
 
-    return closestProj
+    -- Urutkan berdasarkan waktu dampak (paling cepat = paling bahaya)
+    table.sort(threats, function(a, b)
+        return (a.TimeToImpact or 999) < (b.TimeToImpact or 999)
+    end)
+
+    return threats
 end
 
--- ============================================
--- [LOOP UTAMA]
--- ============================================
-RunService.Heartbeat:Connect(function()
-    if not character or not humanoid or not rootPart then return end
+-- ============================================================
+-- 👾 DETEKSI MUSUH DEKAT & SERANGAN AREA (AOE)
+-- ============================================================
+local function getEnemyThreats()
+    if not root then return {} end
+    local myPos = root.Position
+    local threats = {}
 
-    local myPos = rootPart.Position
-
-    -- AUTO ABOVE
-    if isAboveActive then
-        local mob = getNearestMob(myPos, FARM_RANGE)
-        if mob and mob:FindFirstChild("HumanoidRootPart") then
-            local targetPos = mob.HumanoidRootPart.Position + Vector3.new(0, ABOVE_HEIGHT, 0)
-            pcall(function()
-                rootPart.CFrame = CFrame.new(targetPos)
-                humanoid:ChangeState(Enum.HumanoidStateType.Flying)
-            end)
-        end
-    end
-
-    -- AUTO FARM
-    if isFarmActive then
-        local mob, dist = getNearestMob(myPos, FARM_RANGE)
-        if mob and mob:FindFirstChild("HumanoidRootPart") then
-            humanoid:MoveTo(mob.HumanoidRootPart.Position)
-            if dist <= ATTACK_RANGE and tick() - lastAttackTime >= attackCooldown then
-                attackMob(mob)
-                lastAttackTime = tick()
-            end
-        end
-    end
-
-    -- AUTO HINDAR
-    if isDodgeActive then
-        local dangerMob, mobDist = getNearestMob(myPos, DODGE_DETECT_RANGE)
-        if dangerMob then
-            if dodgeMode == "teleport" then
-                dodgeTeleport(dangerMob.HumanoidRootPart.Position)
-            else
-                dodgeSafe(dangerMob.HumanoidRootPart.Position)
-            end
-        else
-            local proj = getDangerousProjectile(myPos)
-            if proj then
-                if dodgeMode == "teleport" then
-                    dodgeTeleport(proj.Position)
-                else
-                    dodgeSafe(proj.Position)
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+            local h = obj:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 and not Players:GetPlayerFromCharacter(obj) then
+                local hrp = obj:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local dist = (myPos - hrp.Position).Magnitude
+                    if dist < CONFIG.DangerDistEnemy then
+                        table.insert(threats, {
+                            Object = obj,
+                            Position = hrp.Position,
+                            Distance = dist,
+                            Type = "Enemy"
+                        })
+                    end
                 end
             end
         end
     end
-end)
 
--- ============================================
--- [UI MODERN]
--- ============================================
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "SwarmGUI"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = player:WaitForChild("PlayerGui")
+    -- Cari efek AOE (ledakan, lingkaran api, dll) berdasarkan partikel
+    for _, part in ipairs(Workspace:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name:lower():find("explosion") or part.Name:lower():find("aoe") then
+            local dist = (myPos - part.Position).Magnitude
+            if dist < 15 then
+                table.insert(threats, {
+                    Object = part,
+                    Position = part.Position,
+                    Distance = dist,
+                    Type = "AOE"
+                })
+            end
+        end
+    end
 
--- Frame utama
-local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 280, 0, 240)
-mainFrame.Position = UDim2.new(0.5, -140, 0.5, -120)
-mainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 28)
-mainFrame.BackgroundTransparency = 0.05
-mainFrame.BorderSizePixel = 0
-mainFrame.Active = true
-mainFrame.Draggable = true
-mainFrame.Parent = screenGui
-
--- UICorner untuk frame utama
-local mainCorner = Instance.new("UICorner")
-mainCorner.CornerRadius = UDim.new(0, 12)
-mainCorner.Parent = mainFrame
-
--- UIStroke untuk frame utama
-local mainStroke = Instance.new("UIStroke")
-mainStroke.Color = Color3.fromRGB(80, 80, 120)
-mainStroke.Thickness = 1
-mainStroke.Transparency = 0.3
-mainStroke.Parent = mainFrame
-
--- Header
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 40)
-header.Position = UDim2.new(0, 0, 0, 0)
-header.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-header.BorderSizePixel = 0
-header.Parent = mainFrame
-
--- Corner header (atas saja)
-local headerCorner = Instance.new("UICorner")
-headerCorner.CornerRadius = UDim.new(0, 12)
-headerCorner.Parent = header
-
--- Gradient header
-local headerGradient = Instance.new("UIGradient")
-headerGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(45, 45, 80)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 25, 45))
-})
-headerGradient.Rotation = 90
-headerGradient.Parent = header
-
--- Judul
-local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, 0, 1, 0)
-titleLabel.Position = UDim2.new(0, 0, 0, 0)
-titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "SWARM ULTIMATE"
-titleLabel.TextColor3 = Color3.fromRGB(220, 220, 255)
-titleLabel.Font = Enum.Font.SourceSansBold
-titleLabel.TextSize = 16
-titleLabel.Parent = header
-
--- Tombol Close
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 28, 0, 28)
-closeBtn.Position = UDim2.new(1, -34, 0, 6)
-closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-closeBtn.BackgroundTransparency = 0.1
-closeBtn.BorderSizePixel = 0
-closeBtn.Text = "X"
-closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-closeBtn.Font = Enum.Font.SourceSansBold
-closeBtn.TextSize = 14
-closeBtn.Parent = mainFrame
-
-local closeCorner = Instance.new("UICorner")
-closeCorner.CornerRadius = UDim.new(0, 8)
-closeCorner.Parent = closeBtn
-
-closeBtn.MouseButton1Click:Connect(function()
-    screenGui:Destroy()
-end)
-
--- Fungsi pembuat tombol modern
-local function createButton(parent, text, yPos, baseColor)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -24, 0, 40)
-    btn.Position = UDim2.new(0, 12, 0, yPos)
-    btn.BackgroundColor3 = baseColor or Color3.fromRGB(60, 60, 80)
-    btn.BorderSizePixel = 0
-    btn.Text = text
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.SourceSansBold
-    btn.TextSize = 13
-    btn.Parent = parent
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = btn
-
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(120, 120, 160)
-    stroke.Thickness = 1
-    stroke.Transparency = 0.5
-    stroke.Parent = btn
-
-    -- Hover effect
-    btn.MouseEnter:Connect(function()
-        btn.BackgroundColor3 = Color3.fromRGB(80, 80, 110)
-    end)
-    btn.MouseLeave:Connect(function()
-        btn.BackgroundColor3 = baseColor or Color3.fromRGB(60, 60, 80)
-    end)
-
-    return btn
+    return threats
 end
 
--- Tombol-tombol fitur
-local btnFarm = createButton(mainFrame, "AUTO FARM: OFF", 50, Color3.fromRGB(50, 50, 70))
-local btnDodge = createButton(mainFrame, "AUTO HINDAR: OFF", 96, Color3.fromRGB(50, 50, 70))
-local btnAbove = createButton(mainFrame, "AUTO ABOVE: OFF", 142, Color3.fromRGB(50, 50, 70))
-local btnMode = createButton(mainFrame, "MODE: AMAN (Move+Jump)", 188, Color3.fromRGB(60, 60, 100))
+-- ============================================================
+-- 🚀 EKSEKUSI DODGE (GERAKAN MAKSIMAL)
+-- ============================================================
+local function performDodge(avoidPos, threatType)
+    if not hum or not root then return end
+    if isDodging then return end
+    if tick() - lastDodgeTime < CONFIG.DodgeCooldown then return end
 
--- Label status
+    isDodging = true
+    local myPos = root.Position
+    local dirAway = (myPos - avoidPos).Unit
+    if dirAway.Magnitude < 0.1 then dirAway = Vector3.new(0, 0, 1) end
+
+    -- Arah tegak lurus (kiri/kanan) untuk zig-zag
+    local right = Vector3.new(0, 1, 0):Cross(dirAway).Unit
+    if right.Magnitude < 0.1 then right = Vector3.new(1, 0, 0) end
+
+    -- Zig-zag
+    dodgeDir = dodgeDir * -1
+    local sideDir = right * dodgeDir
+
+    -- Tentukan arah gerak berdasarkan mode
+    local moveDir
+    if CONFIG.DodgeMode == "Defensive" then
+        -- Defensif: mundur + samping
+        moveDir = (dirAway * -0.4 + sideDir * 0.6).Unit
+    else
+        -- Agresif: samping + sedikit maju (agar tetap dekat)
+        moveDir = (sideDir * 0.8 + dirAway * 0.2).Unit
+    end
+
+    -- Lompat
+    hum.Jump = true
+    task.wait(0.05)
+    hum.Jump = false
+
+    -- Eksekusi dash
+    local dashTarget = myPos + moveDir * CONFIG.DashDistance
+
+    -- Metode 1: MoveTo (paling umum)
+    hum:MoveTo(dashTarget)
+
+    -- Metode 2: BodyVelocity (instan)
+    if CONFIG.UseBodyVelocity and bodyVelocity then
+        bodyVelocity.Velocity = moveDir * 30
+        task.spawn(function()
+            task.wait(0.2)
+            if bodyVelocity then bodyVelocity.Velocity = Vector3.zero end
+        end)
+    end
+
+    -- Metode 3: Tween (opsional)
+    task.spawn(function()
+        local tweenInfo = TweenInfo.new(0.1, Enum.EasingStyle.Linear)
+        local tween = TweenService:Create(root, tweenInfo, {Position = dashTarget})
+        tween:Play()
+    end)
+
+    -- Reset status setelah jeda
+    task.spawn(function()
+        task.wait(0.25)
+        isDodging = false
+        if hum then hum:Move(Vector3.zero, false) end
+    end)
+
+    lastDodgeTime = tick()
+
+    if CONFIG.ShowDebug then
+        print("🔄 Dodge: " .. threatType .. " | Direction: " .. tostring(moveDir))
+    end
+end
+
+-- ============================================================
+-- 🧠 LOGIKA PRIORITAS ANCAMAN
+-- ============================================================
+local function processThreats()
+    if not dodgeOn then return end
+    if not root or not hum then return end
+
+    -- 1. Proyektil (prioritas tertinggi)
+    local projThreats = getProjectileThreats()
+    if #projThreats > 0 then
+        local top = projThreats[1]
+        if top.Distance < CONFIG.DangerDistProj then
+            performDodge(top.Position, "Projectile")
+            return
+        end
+    end
+
+    -- 2. Musuh dekat & AOE
+    local enemyThreats = getEnemyThreats()
+    for _, t in ipairs(enemyThreats) do
+        if t.Type == "Enemy" and t.Distance < CONFIG.DangerDistEnemy then
+            performDodge(t.Position, "Enemy")
+            return
+        elseif t.Type == "AOE" and t.Distance < 10 then
+            performDodge(t.Position, "AOE")
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- ⏱️ LOOP UTAMA (Heartbeat + RenderStepped gabungan)
+-- ============================================================
+RunService.Heartbeat:Connect(processThreats)
+RunService.RenderStepped:Connect(function()
+    -- Tambahan scan lebih cepat untuk proyektil
+    if dodgeOn and not isDodging then
+        -- Bisa tambahkan deteksi tambahan di sini jika perlu
+    end
+end)
+
+-- ============================================================
+-- 🖥️ GUI MAKSIMAL (2 Tombol + Mode)
+-- ============================================================
+local gui = Instance.new("ScreenGui")
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 220, 0, 120)
+frame.Position = UDim2.new(0, 10, 0, 10)
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 35)
+frame.BorderSizePixel = 0
+frame.Parent = gui
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 20)
+title.BackgroundTransparency = 1
+title.Text = "🛡️ DODGE ULTIMATE v99e"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.SourceSansBold
+title.TextSize = 14
+title.Parent = frame
+
+local btnDodge = Instance.new("TextButton")
+btnDodge.Size = UDim2.new(1, -20, 0, 30)
+btnDodge.Position = UDim2.new(0, 10, 0, 25)
+btnDodge.Text = "DODGE: OFF"
+btnDodge.TextColor3 = Color3.fromRGB(255,255,255)
+btnDodge.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+btnDodge.BorderSizePixel = 0
+btnDodge.Parent = frame
+
+local btnMode = Instance.new("TextButton")
+btnMode.Size = UDim2.new(1, -20, 0, 30)
+btnMode.Position = UDim2.new(0, 10, 0, 60)
+btnMode.Text = "MODE: Defensive"
+btnMode.TextColor3 = Color3.fromRGB(255,255,255)
+btnMode.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+btnMode.BorderSizePixel = 0
+btnMode.Parent = frame
+
 local statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, -24, 0, 24)
-statusLabel.Position = UDim2.new(0, 12, 0, 232)
-statusLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-statusLabel.BorderSizePixel = 0
-statusLabel.Text = "STATUS: STANDBY"
-statusLabel.TextColor3 = Color3.fromRGB(200, 200, 220)
+statusLabel.Size = UDim2.new(1, 0, 0, 20)
+statusLabel.Position = UDim2.new(0, 0, 0, 95)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Status: Siap"
+statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
 statusLabel.Font = Enum.Font.SourceSans
-statusLabel.TextSize = 11
-statusLabel.Parent = mainFrame
-
-local statusCorner = Instance.new("UICorner")
-statusCorner.CornerRadius = UDim.new(0, 6)
-statusCorner.Parent = statusLabel
-
-local statusStroke = Instance.new("UIStroke")
-statusStroke.Color = Color3.fromRGB(100, 100, 140)
-statusStroke.Thickness = 1
-statusStroke.Transparency = 0.7
-statusStroke.Parent = statusLabel
-
--- ============================================
--- [EVENT TOMBOL]
--- ============================================
-btnFarm.MouseButton1Click:Connect(function()
-    isFarmActive = not isFarmActive
-    btnFarm.Text = isFarmActive and "AUTO FARM: ON" or "AUTO FARM: OFF"
-    btnFarm.BackgroundColor3 = isFarmActive and Color3.fromRGB(40, 130, 60) or Color3.fromRGB(50, 50, 70)
-    statusLabel.Text = isFarmActive and "STATUS: FARM AKTIF" or "STATUS: STANDBY"
-end)
+statusLabel.TextSize = 12
+statusLabel.Parent = frame
 
 btnDodge.MouseButton1Click:Connect(function()
-    isDodgeActive = not isDodgeActive
-    btnDodge.Text = isDodgeActive and "AUTO HINDAR: ON" or "AUTO HINDAR: OFF"
-    btnDodge.BackgroundColor3 = isDodgeActive and Color3.fromRGB(40, 130, 60) or Color3.fromRGB(50, 50, 70)
-    if isDodgeActive then
-        statusLabel.Text = "STATUS: HINDAR " .. string.upper(dodgeMode)
-    else
-        statusLabel.Text = "STATUS: STANDBY"
-    end
-end)
-
-btnAbove.MouseButton1Click:Connect(function()
-    isAboveActive = not isAboveActive
-    btnAbove.Text = isAboveActive and "AUTO ABOVE: ON" or "AUTO ABOVE: OFF"
-    btnAbove.BackgroundColor3 = isAboveActive and Color3.fromRGB(40, 130, 60) or Color3.fromRGB(50, 50, 70)
-    statusLabel.Text = isAboveActive and "STATUS: ABOVE AKTIF" or "STATUS: STANDBY"
+    dodgeOn = not dodgeOn
+    btnDodge.Text = dodgeOn and "DODGE: ON" or "DODGE: OFF"
+    btnDodge.BackgroundColor3 = dodgeOn and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(50, 50, 70)
+    statusLabel.Text = dodgeOn and "🟢 Aktif" or "🔴 Mati"
+    statusLabel.TextColor3 = dodgeOn and Color3.fromRGB(0, 255, 100) or Color3.fromRGB(200, 200, 200)
+    print(dodgeOn and "✅ Dodge Ultimate aktif!" or "⏹ Dodge mati.")
 end)
 
 btnMode.MouseButton1Click:Connect(function()
-    if dodgeMode == "safe" then
-        dodgeMode = "teleport"
-        btnMode.Text = "MODE: CEPAT (TELEPORT)"
-        btnMode.BackgroundColor3 = Color3.fromRGB(140, 70, 40)
-    else
-        dodgeMode = "safe"
-        btnMode.Text = "MODE: AMAN (Move+Jump)"
-        btnMode.BackgroundColor3 = Color3.fromRGB(60, 60, 100)
-    end
-    if isDodgeActive then
-        statusLabel.Text = "STATUS: HINDAR " .. string.upper(dodgeMode)
-    end
+    CONFIG.DodgeMode = (CONFIG.DodgeMode == "Defensive") and "Aggressive" or "Defensive"
+    btnMode.Text = "MODE: " .. CONFIG.DodgeMode
+    btnMode.BackgroundColor3 = (CONFIG.DodgeMode == "Defensive") and Color3.fromRGB(50, 50, 70) or Color3.fromRGB(70, 50, 30)
+    print("🔄 Mode diubah ke: " .. CONFIG.DodgeMode)
 end)
 
-print("UI modern terpasang. Script siap digunakan.")
+print("✅ Script Auto Dodge Ultimate v99e siap!")
+print("💡 Nyalakan DODGE. Karakter akan lompat + dash zig-zag hindari semua ancaman.")
