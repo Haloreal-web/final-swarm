@@ -1,220 +1,363 @@
 -- ============================================
--- SCRIPT ULTIMATE - ANTI PANAH + ANTI AOE
+-- SCRIPT GOD MODE 25 LAPIS (FULL TANPA SINGKAT)
 -- ============================================
--- ✅ Panah dihancurin
--- ✅ Raycast (tembakan) gak kena
--- ✅ PlatformStand (anti jatuh & knockback)
--- ✅ Health Lock (buat jaga-jaga walau ilusi)
+-- ❌ Tidak ada auto farm / follow mob
+-- ❌ Tidak ada destroy object / anti-raycast ilegal
+-- ❌ Tidak ada auto attack
+-- ✅ Hanya God Mode 25 lapis anti mati
+-- ✅ Karakter diam di tempat (anti knockback/fall)
+-- ✅ Health tidak bisa berkurang
 -- ============================================
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
-local rootPart = character:WaitForChild("HumanoidRootPart")
+local character, humanoid, rootPart
 
-local isRunning = false
-local lastAttack = 0
-local lastScan = 0
-local cachedMobs = {}
-local mobFolders = {"Monsters", "Enemies", "Mobs", "NPCs"}
+local isGodMode = false
+local godConnections = {}  -- simpan koneksi untuk disconnect
+local forceFields = {}     -- simpan forcefield yang dibuat
 
 -- ============================================
--- [PROYEKTIL DESTROYER]
+-- [FUNGSI APPLY GOD MODE 25 LAPIS]
 -- ============================================
-local function destroyProjectiles()
-    if not rootPart then return end
-    local myPos = rootPart.Position
-    for _, part in ipairs(Workspace:GetDescendants()) do
-        if part:IsA("BasePart") and not part:IsDescendantOf(character) then
-            local speed = part.AssemblyLinearVelocity and part.AssemblyLinearVelocity.Magnitude or 0
-            if speed > 20 and (myPos - part.Position).Magnitude < 35 then
-                pcall(function() part:Destroy() end)
-            end
+local function ApplyGodMode25()
+    if not character or not humanoid or not rootPart then return end
+
+    ------------------------------------------------------------
+    -- LAPIS 1: MaxHealth tak terbatas
+    ------------------------------------------------------------
+    pcall(function()
+        humanoid.MaxHealth = math.huge
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 2: Health langsung di-set tak terbatas
+    ------------------------------------------------------------
+    pcall(function()
+        humanoid.Health = math.huge
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 3: Matikan state Dead
+    ------------------------------------------------------------
+    pcall(function()
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 4: Matikan state FallingDown (ragdoll)
+    ------------------------------------------------------------
+    pcall(function()
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 5: Matikan state Ragdoll
+    ------------------------------------------------------------
+    pcall(function()
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 6: Matikan state Physics (biar tidak terpengaruh fisika)
+    ------------------------------------------------------------
+    pcall(function()
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 7: Jangan hancurkan sambungan saat mati
+    ------------------------------------------------------------
+    pcall(function()
+        humanoid.BreakJointsOnDeath = false
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 8: HealthChanged langsung recover
+    ------------------------------------------------------------
+    local conn8 = humanoid.HealthChanged:Connect(function(newHealth)
+        if isGodMode and newHealth ~= math.huge then
+            humanoid.Health = math.huge
         end
-    end
-end
+    end)
+    table.insert(godConnections, conn8)
 
--- ============================================
--- [DEFENSE + STEALTH + PLATFORMSTAND]
--- ============================================
-local function applyDefense()
-    if not character then return end
-    
-    -- 1. Stealth & Anti-Raycast
+    ------------------------------------------------------------
+    -- LAPIS 9: Property Health berubah langsung recover
+    ------------------------------------------------------------
+    local conn9 = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+        if isGodMode and humanoid.Health ~= math.huge then
+            humanoid.Health = math.huge
+        end
+    end)
+    table.insert(godConnections, conn9)
+
+    ------------------------------------------------------------
+    -- LAPIS 10: Heartbeat loop (setiap frame)
+    ------------------------------------------------------------
+    local conn10 = RunService.Heartbeat:Connect(function()
+        if isGodMode and humanoid and humanoid.Health ~= math.huge then
+            humanoid.Health = math.huge
+        end
+    end)
+    table.insert(godConnections, conn10)
+
+    ------------------------------------------------------------
+    -- LAPIS 11: Stepped loop (setiap physics step)
+    ------------------------------------------------------------
+    local conn11 = RunService.Stepped:Connect(function()
+        if isGodMode and humanoid and humanoid.Health ~= math.huge then
+            humanoid.Health = math.huge
+        end
+    end)
+    table.insert(godConnections, conn11)
+
+    ------------------------------------------------------------
+    -- LAPIS 12: RenderStepped loop (setiap render frame)
+    ------------------------------------------------------------
+    local conn12 = RunService.RenderStepped:Connect(function()
+        if isGodMode and humanoid and humanoid.Health ~= math.huge then
+            humanoid.Health = math.huge
+        end
+    end)
+    table.insert(godConnections, conn12)
+
+    ------------------------------------------------------------
+    -- LAPIS 13: Died event -> revive instan
+    ------------------------------------------------------------
+    local conn13 = humanoid.Died:Connect(function()
+        if isGodMode then
+            task.wait(0.05)
+            pcall(function()
+                humanoid.Health = math.huge
+                humanoid:ChangeState(Enum.HumanoidStateType.Running)
+                rootPart.CFrame = rootPart.CFrame + Vector3.new(0, 5, 0)
+            end)
+        end
+    end)
+    table.insert(godConnections, conn13)
+
+    ------------------------------------------------------------
+    -- LAPIS 14: ForceField pertama
+    ------------------------------------------------------------
+    local ff1 = Instance.new("ForceField")
+    ff1.Name = "GodShield_1"
+    ff1.Visible = false
+    ff1.Parent = character
+    table.insert(forceFields, ff1)
+
+    ------------------------------------------------------------
+    -- LAPIS 15: ForceField kedua
+    ------------------------------------------------------------
+    local ff2 = Instance.new("ForceField")
+    ff2.Name = "GodShield_2"
+    ff2.Visible = false
+    ff2.Parent = character
+    table.insert(forceFields, ff2)
+
+    ------------------------------------------------------------
+    -- LAPIS 16: ForceField ketiga
+    ------------------------------------------------------------
+    local ff3 = Instance.new("ForceField")
+    ff3.Name = "GodShield_3"
+    ff3.Visible = false
+    ff3.Parent = character
+    table.insert(forceFields, ff3)
+
+    ------------------------------------------------------------
+    -- LAPIS 17: ForceField keempat
+    ------------------------------------------------------------
+    local ff4 = Instance.new("ForceField")
+    ff4.Name = "GodShield_4"
+    ff4.Visible = false
+    ff4.Parent = character
+    table.insert(forceFields, ff4)
+
+    ------------------------------------------------------------
+    -- LAPIS 18: ForceField kelima
+    ------------------------------------------------------------
+    local ff5 = Instance.new("ForceField")
+    ff5.Name = "GodShield_5"
+    ff5.Visible = false
+    ff5.Parent = character
+    table.insert(forceFields, ff5)
+
+    ------------------------------------------------------------
+    -- LAPIS 19: Anchor semua part (anti knockback & jatuh)
+    ------------------------------------------------------------
     for _, part in ipairs(character:GetDescendants()) do
         if part:IsA("BasePart") then
             pcall(function()
-                part.Transparency = 1
-                part.CanCollide = true
-                part.CanTouch = false
-                part.CanQuery = false  -- Anti raycast
+                part.Anchored = true
             end)
         end
     end
-    if humanoid then
-        humanoid.HealthDisplayDistance = 0
-        humanoid.NameDisplayDistance = 0
-        -- PlatformStand = Anti Jatuh & Anti Knockback (biar gak glitch)
-        humanoid.PlatformStand = true
-    end
-    
-    -- 2. ForceField
-    if not character:FindFirstChild("DefenseShield") then
-        local shield = Instance.new("ForceField")
-        shield.Name = "DefenseShield"
-        shield.Visible = false
-        shield.Parent = character
-    end
 
-    -- 3. Health Lock (jaga-jaga biar gak tiba-tiba mati)
-    if humanoid and humanoid.Health < humanoid.MaxHealth then
-        humanoid.Health = humanoid.MaxHealth
-    end
-end
-
--- ============================================
--- [CARI MUSUH]
--- ============================================
-local function getMobs()
-    if tick() - lastScan < 0.5 then return cachedMobs end
-    lastScan = tick()
-    cachedMobs = {}
-    for _, fname in ipairs(mobFolders) do
-        local f = Workspace:FindFirstChild(fname)
-        if f then
-            for _, child in ipairs(f:GetChildren()) do
-                if child:IsA("Model") and child:FindFirstChild("Humanoid") then
-                    local h = child.Humanoid
-                    if h.Health > 0 and not Players:GetPlayerFromCharacter(child) then
-                        table.insert(cachedMobs, child)
-                    end
-                end
-            end
+    ------------------------------------------------------------
+    -- LAPIS 20: Set CanCollide false semua part (supaya serangan fisik menembus)
+    ------------------------------------------------------------
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            pcall(function()
+                part.CanCollide = false
+            end)
         end
     end
-    return cachedMobs
-end
 
--- ============================================
--- [SERANG & NEXT WAVE]
--- ============================================
-local function findRemote()
-    local names = {"Attack", "Hit", "Damage", "Fire"}
-    for _, n in ipairs(names) do
-        local r = ReplicatedStorage:FindFirstChild(n)
-        if r then return r end
-    end
-    return nil
-end
-local attackRemote = findRemote()
-
-local function attackMob(mob)
-    if not mob then return end
-    if attackRemote then pcall(function() attackRemote:FireServer(mob) end) end
+    ------------------------------------------------------------
+    -- LAPIS 21: Sembunyikan tampilan health & nama
+    ------------------------------------------------------------
     pcall(function()
-        local mouse = player:GetMouse()
-        if mouse and mob:FindFirstChild("HumanoidRootPart") then
-            mouse.Target = mob.HumanoidRootPart
+        humanoid.HealthDisplayDistance = 0
+        humanoid.NameDisplayDistance = 0
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 22: Anti void (teleport ke atas kalau jatuh ke bawah)
+    ------------------------------------------------------------
+    local minY = Workspace.FallenPartsDestroyHeight or -500
+    if rootPart.Position.Y < minY + 10 then
+        rootPart.CFrame = CFrame.new(rootPart.Position.X, minY + 50, rootPart.Position.Z)
+    end
+
+    ------------------------------------------------------------
+    -- LAPIS 23: Set health tak terbatas ulang via task.spawn loop
+    ------------------------------------------------------------
+    task.spawn(function()
+        while isGodMode and humanoid and humanoid.Parent do
+            pcall(function()
+                humanoid.Health = math.huge
+            end)
+            task.wait(0.01)
+        end
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 24: Set MaxHealth tak terbatas ulang via task.spawn loop
+    ------------------------------------------------------------
+    task.spawn(function()
+        while isGodMode and humanoid and humanoid.Parent do
+            pcall(function()
+                humanoid.MaxHealth = math.huge
+            end)
+            task.wait(0.1)
+        end
+    end)
+
+    ------------------------------------------------------------
+    -- LAPIS 25: Set ulang state enabled false setiap saat
+    ------------------------------------------------------------
+    task.spawn(function()
+        while isGodMode and humanoid and humanoid.Parent do
+            pcall(function()
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
+            end)
+            task.wait(0.5)
         end
     end)
 end
 
-local function clickNextWave()
-    for _, gui in ipairs(player.PlayerGui:GetChildren()) do
-        if gui:IsA("ScreenGui") then
-            for _, btn in ipairs(gui:GetDescendants()) do
-                if btn:IsA("TextButton") and btn.Visible then
-                    local t = btn.Text:lower()
-                    if t:find("next") or t:find("wave") or t:find("start") then
-                        pcall(function() btn:Click() end)
-                        return true
-                    end
-                end
-            end
+-- ============================================
+-- [FUNGSI REMOVE GOD MODE 25 LAPIS]
+-- ============================================
+local function RemoveGodMode25()
+    -- Matikan koneksi
+    for _, conn in ipairs(godConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    godConnections = {}
+
+    -- Hapus semua forcefield
+    for _, ff in ipairs(forceFields) do
+        pcall(function() ff:Destroy() end)
+    end
+    forceFields = {}
+
+    -- Kembalikan state & properti
+    pcall(function()
+        if humanoid then
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, true)
+            humanoid.BreakJointsOnDeath = true
+            humanoid.MaxHealth = 100  -- ganti sesuai default game
+            humanoid.Health = humanoid.MaxHealth
+            humanoid.HealthDisplayDistance = 100
+            humanoid.NameDisplayDistance = 100
+        end
+    end)
+
+    -- Unanchor & kembalikan CanCollide
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            pcall(function()
+                part.Anchored = false
+                part.CanCollide = true
+            end)
         end
     end
-    return false
 end
 
 -- ============================================
--- [LOOP UTAMA]
+-- [EVENT CHARACTER]
 -- ============================================
-RunService.Heartbeat:Connect(function()
-    if not isRunning then return end
-    if not character or not humanoid or not rootPart then return end
+local function OnCharacterAdded(newChar)
+    character = newChar
+    humanoid = character:WaitForChild("Humanoid")
+    rootPart = character:WaitForChild("HumanoidRootPart")
 
-    -- 1. Hancurin panah
-    destroyProjectiles()
-    
-    -- 2. Pasang pertahanan (Stealth + Anti-Raycast + PlatformStand + Health Lock)
-    applyDefense()
-
-    -- 3. Auto Farm
-    local mobs = getMobs()
-    local closest, closestDist = nil, math.huge
-    for _, mob in ipairs(mobs) do
-        local hrp = mob:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local d = (rootPart.Position - hrp.Position).Magnitude
-            if d < closestDist then
-                closestDist = d
-                closest = mob
-            end
-        end
+    -- Kalau god mode sedang aktif, reapply
+    if isGodMode then
+        ApplyGodMode25()
     end
+end
 
-    if closest and closestDist < 50 then
-        humanoid:MoveTo(closest.HumanoidRootPart.Position)
-        if closestDist <= 15 and tick() - lastAttack > 0.2 then
-            attackMob(closest)
-            lastAttack = tick()
-        end
-    else
-        if tick() % 2 < 0.1 then clickNextWave() end
-    end
-end)
+if player.Character then
+    OnCharacterAdded(player.Character)
+end
+player.CharacterAdded:Connect(OnCharacterAdded)
 
 -- ============================================
--- [RESPAWN]
+-- [GUI TOMBOL]
 -- ============================================
-player.CharacterAdded:Connect(function(c)
-    character = c
-    humanoid = c:WaitForChild("Humanoid")
-    rootPart = c:WaitForChild("HumanoidRootPart")
-end)
-
--- ============================================
--- [GUI]
--- ============================================
-local gui = Instance.new("ScreenGui")
+local screenGui = Instance.new("ScreenGui")
 local frame = Instance.new("Frame")
-local btn = Instance.new("TextButton")
-gui.Parent = player:WaitForChild("PlayerGui")
-frame.Parent = gui
-frame.Size = UDim2.new(0, 220, 0, 50)
+local btnGod = Instance.new("TextButton")
+
+screenGui.Parent = player:WaitForChild("PlayerGui")
+frame.Parent = screenGui
+frame.Size = UDim2.new(0, 200, 0, 60)
 frame.Position = UDim2.new(0, 20, 0, 20)
-frame.BackgroundColor3 = Color3.fromRGB(20, 20, 40)
-frame.BackgroundTransparency = 0.2
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 35)
+frame.BackgroundTransparency = 0.15
 frame.BorderSizePixel = 0
 
-btn.Parent = frame
-btn.Size = UDim2.new(1, -20, 0, 35)
-btn.Position = UDim2.new(0, 10, 0, 8)
-btn.Text = "▶ START (AMAN PANAH & RAYCAST)"
-btn.TextColor3 = Color3.fromRGB(255,255,255)
-btn.BackgroundColor3 = Color3.fromRGB(60, 60, 140)
+btnGod.Parent = frame
+btnGod.Size = UDim2.new(1, -20, 0, 40)
+btnGod.Position = UDim2.new(0, 10, 0, 10)
+btnGod.Text = "🛡️ GOD MODE: OFF"
+btnGod.TextColor3 = Color3.fromRGB(255,255,255)
+btnGod.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
 
-btn.MouseButton1Click:Connect(function()
-    isRunning = not isRunning
-    btn.Text = isRunning and "⏹ STOP" or "▶ START (AMAN PANAH & RAYCAST)"
-    btn.BackgroundColor3 = isRunning and Color3.fromRGB(140, 40, 40) or Color3.fromRGB(60, 60, 140)
-    print(isRunning and "✅ AKTIF! Panah hancur, raycast gak kena, AOE dikurangin." or "⏹ Mati.")
+btnGod.MouseButton1Click:Connect(function()
+    isGodMode = not isGodMode
+    if isGodMode then
+        btnGod.Text = "🛡️ GOD MODE: ON (25 LAPIS)"
+        btnGod.BackgroundColor3 = Color3.fromRGB(40, 120, 40)
+        ApplyGodMode25()
+    else
+        btnGod.Text = "🛡️ GOD MODE: OFF"
+        btnGod.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+        RemoveGodMode25()
+    end
 end)
 
-print("✅ SCRIPT ULTIMATE! Panah & Tembakan GAK BISA KENA KAMU.")
-print("⚠️ Catatan: Serangan Area (AOE/ledakan) mungkin tetap kena karena itu dari server.")
+print("✅ God Mode 25 lapis aktif! Karakter tidak bisa mati, health terkunci tak terbatas.")
+print("⚠️ Catatan: Jika server full authoritative, masih ada kemungkinan mati. Gunakan server script untuk hasil 100%.")
