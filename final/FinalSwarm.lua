@@ -1,12 +1,12 @@
 -- ============================================
--- SCRIPT GOD MODE 25 LAPIS (FULL TANPA SINGKAT)
+-- SCRIPT GOD MODE SUPER REGEN (FULL FIX)
 -- ============================================
--- ❌ Tidak ada auto farm / follow mob
+-- ❌ Tidak ada auto attack / follow mob
 -- ❌ Tidak ada destroy object / anti-raycast ilegal
--- ❌ Tidak ada auto attack
--- ✅ Hanya God Mode 25 lapis anti mati
--- ✅ Karakter diam di tempat (anti knockback/fall)
--- ✅ Health tidak bisa berkurang
+-- ✅ Health regen gila (setiap 0.001 detik)
+-- ✅ Override MaxHealth dari perk/upgrade
+-- ✅ Anti mati berlapis-lapis
+-- ✅ Karakter diam di tempat (anti knockback)
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -17,176 +17,140 @@ local player = Players.LocalPlayer
 local character, humanoid, rootPart
 
 local isGodMode = false
-local godConnections = {}  -- simpan koneksi untuk disconnect
-local forceFields = {}     -- simpan forcefield yang dibuat
+local godConnections = {}  -- simpan koneksi
+local forceFields = {}     -- simpan forcefield
+local regenThreads = {}    -- simpan thread loop
 
 -- ============================================
--- [FUNGSI APPLY GOD MODE 25 LAPIS]
+-- [FUNGSI APPLY GOD MODE SUPER REGEN]
 -- ============================================
-local function ApplyGodMode25()
+local function ApplyGodMode()
     if not character or not humanoid or not rootPart then return end
 
+    -- Matikan koneksi/thread lama biar bersih
+    for _, conn in ipairs(godConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    godConnections = {}
+    for _, thread in ipairs(regenThreads) do
+        pcall(function() thread:Cancel() end)
+    end
+    regenThreads = {}
+
     ------------------------------------------------------------
-    -- LAPIS 1: MaxHealth tak terbatas
+    -- LAPIS 1: Set MaxHealth ke angka super besar
     ------------------------------------------------------------
     pcall(function()
-        humanoid.MaxHealth = math.huge
+        humanoid.MaxHealth = 1e9  -- 1 miliar (bisa diganti math.huge)
     end)
 
     ------------------------------------------------------------
-    -- LAPIS 2: Health langsung di-set tak terbatas
+    -- LAPIS 2: Set Health langsung ke MaxHealth (1 miliar)
     ------------------------------------------------------------
     pcall(function()
-        humanoid.Health = math.huge
+        humanoid.Health = humanoid.MaxHealth
     end)
 
     ------------------------------------------------------------
-    -- LAPIS 3: Matikan state Dead
+    -- LAPIS 3: Override MaxHealth jika perk mengubahnya
+    ------------------------------------------------------------
+    local maxHealthConn = humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(function()
+        if isGodMode then
+            pcall(function()
+                humanoid.MaxHealth = 1e9
+                humanoid.Health = humanoid.MaxHealth
+            end)
+        end
+    end)
+    table.insert(godConnections, maxHealthConn)
+
+    ------------------------------------------------------------
+    -- LAPIS 4: HealthChanged langsung regen penuh
+    ------------------------------------------------------------
+    local healthChangedConn = humanoid.HealthChanged:Connect(function(newHealth)
+        if isGodMode and newHealth < humanoid.MaxHealth then
+            pcall(function()
+                humanoid.Health = humanoid.MaxHealth
+            end)
+        end
+    end)
+    table.insert(godConnections, healthChangedConn)
+
+    ------------------------------------------------------------
+    -- LAPIS 5: Property Health berubah langsung regen penuh
+    ------------------------------------------------------------
+    local healthPropConn = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+        if isGodMode and humanoid.Health < humanoid.MaxHealth then
+            pcall(function()
+                humanoid.Health = humanoid.MaxHealth
+            end)
+        end
+    end)
+    table.insert(godConnections, healthPropConn)
+
+    ------------------------------------------------------------
+    -- LAPIS 6: Matikan state Dead
     ------------------------------------------------------------
     pcall(function()
         humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
     end)
 
     ------------------------------------------------------------
-    -- LAPIS 4: Matikan state FallingDown (ragdoll)
+    -- LAPIS 7: Matikan state FallingDown (ragdoll)
     ------------------------------------------------------------
     pcall(function()
         humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
     end)
 
     ------------------------------------------------------------
-    -- LAPIS 5: Matikan state Ragdoll
+    -- LAPIS 8: Matikan state Ragdoll
     ------------------------------------------------------------
     pcall(function()
         humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
     end)
 
     ------------------------------------------------------------
-    -- LAPIS 6: Matikan state Physics (biar tidak terpengaruh fisika)
+    -- LAPIS 9: Matikan state Physics
     ------------------------------------------------------------
     pcall(function()
         humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
     end)
 
     ------------------------------------------------------------
-    -- LAPIS 7: Jangan hancurkan sambungan saat mati
+    -- LAPIS 10: Jangan hancurkan sambungan saat mati
     ------------------------------------------------------------
     pcall(function()
         humanoid.BreakJointsOnDeath = false
     end)
 
     ------------------------------------------------------------
-    -- LAPIS 8: HealthChanged langsung recover
+    -- LAPIS 11: Event Died -> bangkit instan
     ------------------------------------------------------------
-    local conn8 = humanoid.HealthChanged:Connect(function(newHealth)
-        if isGodMode and newHealth ~= math.huge then
-            humanoid.Health = math.huge
-        end
-    end)
-    table.insert(godConnections, conn8)
-
-    ------------------------------------------------------------
-    -- LAPIS 9: Property Health berubah langsung recover
-    ------------------------------------------------------------
-    local conn9 = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
-        if isGodMode and humanoid.Health ~= math.huge then
-            humanoid.Health = math.huge
-        end
-    end)
-    table.insert(godConnections, conn9)
-
-    ------------------------------------------------------------
-    -- LAPIS 10: Heartbeat loop (setiap frame)
-    ------------------------------------------------------------
-    local conn10 = RunService.Heartbeat:Connect(function()
-        if isGodMode and humanoid and humanoid.Health ~= math.huge then
-            humanoid.Health = math.huge
-        end
-    end)
-    table.insert(godConnections, conn10)
-
-    ------------------------------------------------------------
-    -- LAPIS 11: Stepped loop (setiap physics step)
-    ------------------------------------------------------------
-    local conn11 = RunService.Stepped:Connect(function()
-        if isGodMode and humanoid and humanoid.Health ~= math.huge then
-            humanoid.Health = math.huge
-        end
-    end)
-    table.insert(godConnections, conn11)
-
-    ------------------------------------------------------------
-    -- LAPIS 12: RenderStepped loop (setiap render frame)
-    ------------------------------------------------------------
-    local conn12 = RunService.RenderStepped:Connect(function()
-        if isGodMode and humanoid and humanoid.Health ~= math.huge then
-            humanoid.Health = math.huge
-        end
-    end)
-    table.insert(godConnections, conn12)
-
-    ------------------------------------------------------------
-    -- LAPIS 13: Died event -> revive instan
-    ------------------------------------------------------------
-    local conn13 = humanoid.Died:Connect(function()
+    local diedConn = humanoid.Died:Connect(function()
         if isGodMode then
-            task.wait(0.05)
+            task.wait(0.01)
             pcall(function()
-                humanoid.Health = math.huge
+                humanoid.Health = humanoid.MaxHealth
                 humanoid:ChangeState(Enum.HumanoidStateType.Running)
                 rootPart.CFrame = rootPart.CFrame + Vector3.new(0, 5, 0)
             end)
         end
     end)
-    table.insert(godConnections, conn13)
+    table.insert(godConnections, diedConn)
 
     ------------------------------------------------------------
-    -- LAPIS 14: ForceField pertama
+    -- LAPIS 12-16: ForceField bertumpuk (5x)
     ------------------------------------------------------------
-    local ff1 = Instance.new("ForceField")
-    ff1.Name = "GodShield_1"
-    ff1.Visible = false
-    ff1.Parent = character
-    table.insert(forceFields, ff1)
+    for i = 1, 5 do
+        local ff = Instance.new("ForceField")
+        ff.Name = "GodShield_" .. i
+        ff.Visible = false
+        ff.Parent = character
+        table.insert(forceFields, ff)
+    end
 
     ------------------------------------------------------------
-    -- LAPIS 15: ForceField kedua
-    ------------------------------------------------------------
-    local ff2 = Instance.new("ForceField")
-    ff2.Name = "GodShield_2"
-    ff2.Visible = false
-    ff2.Parent = character
-    table.insert(forceFields, ff2)
-
-    ------------------------------------------------------------
-    -- LAPIS 16: ForceField ketiga
-    ------------------------------------------------------------
-    local ff3 = Instance.new("ForceField")
-    ff3.Name = "GodShield_3"
-    ff3.Visible = false
-    ff3.Parent = character
-    table.insert(forceFields, ff3)
-
-    ------------------------------------------------------------
-    -- LAPIS 17: ForceField keempat
-    ------------------------------------------------------------
-    local ff4 = Instance.new("ForceField")
-    ff4.Name = "GodShield_4"
-    ff4.Visible = false
-    ff4.Parent = character
-    table.insert(forceFields, ff4)
-
-    ------------------------------------------------------------
-    -- LAPIS 18: ForceField kelima
-    ------------------------------------------------------------
-    local ff5 = Instance.new("ForceField")
-    ff5.Name = "GodShield_5"
-    ff5.Visible = false
-    ff5.Parent = character
-    table.insert(forceFields, ff5)
-
-    ------------------------------------------------------------
-    -- LAPIS 19: Anchor semua part (anti knockback & jatuh)
+    -- LAPIS 17: Anchor semua part (anti knockback & jatuh)
     ------------------------------------------------------------
     for _, part in ipairs(character:GetDescendants()) do
         if part:IsA("BasePart") then
@@ -197,7 +161,7 @@ local function ApplyGodMode25()
     end
 
     ------------------------------------------------------------
-    -- LAPIS 20: Set CanCollide false semua part (supaya serangan fisik menembus)
+    -- LAPIS 18: CanCollide false semua part (anti serangan fisik)
     ------------------------------------------------------------
     for _, part in ipairs(character:GetDescendants()) do
         if part:IsA("BasePart") then
@@ -208,7 +172,7 @@ local function ApplyGodMode25()
     end
 
     ------------------------------------------------------------
-    -- LAPIS 21: Sembunyikan tampilan health & nama
+    -- LAPIS 19: Sembunyikan health & nama
     ------------------------------------------------------------
     pcall(function()
         humanoid.HealthDisplayDistance = 0
@@ -216,7 +180,7 @@ local function ApplyGodMode25()
     end)
 
     ------------------------------------------------------------
-    -- LAPIS 22: Anti void (teleport ke atas kalau jatuh ke bawah)
+    -- LAPIS 20: Anti void (teleport ke atas kalau jatuh)
     ------------------------------------------------------------
     local minY = Workspace.FallenPartsDestroyHeight or -500
     if rootPart.Position.Y < minY + 10 then
@@ -224,33 +188,73 @@ local function ApplyGodMode25()
     end
 
     ------------------------------------------------------------
-    -- LAPIS 23: Set health tak terbatas ulang via task.spawn loop
+    -- LAPIS 21: Loop Heartbeat (setiap frame)
     ------------------------------------------------------------
-    task.spawn(function()
+    local heartbeatLoop = RunService.Heartbeat:Connect(function()
+        if isGodMode and humanoid and humanoid.Parent then
+            pcall(function()
+                humanoid.MaxHealth = 1e9
+                humanoid.Health = humanoid.MaxHealth
+            end)
+        end
+    end)
+    table.insert(godConnections, heartbeatLoop)
+
+    ------------------------------------------------------------
+    -- LAPIS 22: Loop Stepped (setiap physics step)
+    ------------------------------------------------------------
+    local steppedLoop = RunService.Stepped:Connect(function()
+        if isGodMode and humanoid and humanoid.Parent then
+            pcall(function()
+                humanoid.Health = humanoid.MaxHealth
+            end)
+        end
+    end)
+    table.insert(godConnections, steppedLoop)
+
+    ------------------------------------------------------------
+    -- LAPIS 23: Loop RenderStepped (setiap render frame)
+    ------------------------------------------------------------
+    local renderLoop = RunService.RenderStepped:Connect(function()
+        if isGodMode and humanoid and humanoid.Parent then
+            pcall(function()
+                humanoid.Health = humanoid.MaxHealth
+            end)
+        end
+    end)
+    table.insert(godConnections, renderLoop)
+
+    ------------------------------------------------------------
+    -- LAPIS 24: Super regen loop (tiap 0.001 detik)
+    ------------------------------------------------------------
+    local thread1 = task.spawn(function()
         while isGodMode and humanoid and humanoid.Parent do
             pcall(function()
-                humanoid.Health = math.huge
+                humanoid.Health = humanoid.MaxHealth
+            end)
+            task.wait(0.001)
+        end
+    end)
+    table.insert(regenThreads, thread1)
+
+    ------------------------------------------------------------
+    -- LAPIS 25: MaxHealth lock loop (tiap 0.01 detik)
+    ------------------------------------------------------------
+    local thread2 = task.spawn(function()
+        while isGodMode and humanoid and humanoid.Parent do
+            pcall(function()
+                humanoid.MaxHealth = 1e9
+                humanoid.Health = humanoid.MaxHealth
             end)
             task.wait(0.01)
         end
     end)
+    table.insert(regenThreads, thread2)
 
     ------------------------------------------------------------
-    -- LAPIS 24: Set MaxHealth tak terbatas ulang via task.spawn loop
+    -- LAPIS 26: State lock loop (tiap 0.1 detik)
     ------------------------------------------------------------
-    task.spawn(function()
-        while isGodMode and humanoid and humanoid.Parent do
-            pcall(function()
-                humanoid.MaxHealth = math.huge
-            end)
-            task.wait(0.1)
-        end
-    end)
-
-    ------------------------------------------------------------
-    -- LAPIS 25: Set ulang state enabled false setiap saat
-    ------------------------------------------------------------
-    task.spawn(function()
+    local thread3 = task.spawn(function()
         while isGodMode and humanoid and humanoid.Parent do
             pcall(function()
                 humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
@@ -258,28 +262,53 @@ local function ApplyGodMode25()
                 humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
                 humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
             end)
-            task.wait(0.5)
+            task.wait(0.1)
         end
     end)
+    table.insert(regenThreads, thread3)
+
+    ------------------------------------------------------------
+    -- LAPIS 27: ForceField refresh loop (tiap 1 detik)
+    ------------------------------------------------------------
+    local thread4 = task.spawn(function()
+        while isGodMode and character and character.Parent do
+            -- Cek forcefield masih ada, kalau hilang buat lagi
+            local existing = character:FindFirstChild("GodShield_1")
+            if not existing then
+                local ff = Instance.new("ForceField")
+                ff.Name = "GodShield_1"
+                ff.Visible = false
+                ff.Parent = character
+            end
+            task.wait(1)
+        end
+    end)
+    table.insert(regenThreads, thread4)
 end
 
 -- ============================================
--- [FUNGSI REMOVE GOD MODE 25 LAPIS]
+-- [FUNGSI REMOVE GOD MODE]
 -- ============================================
-local function RemoveGodMode25()
+local function RemoveGodMode()
     -- Matikan koneksi
     for _, conn in ipairs(godConnections) do
         pcall(function() conn:Disconnect() end)
     end
     godConnections = {}
 
-    -- Hapus semua forcefield
+    -- Matikan thread loop
+    for _, thread in ipairs(regenThreads) do
+        pcall(function() thread:Cancel() end)
+    end
+    regenThreads = {}
+
+    -- Hapus forcefield
     for _, ff in ipairs(forceFields) do
         pcall(function() ff:Destroy() end)
     end
     forceFields = {}
 
-    -- Kembalikan state & properti
+    -- Kembalikan setting
     pcall(function()
         if humanoid then
             humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
@@ -287,7 +316,7 @@ local function RemoveGodMode25()
             humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
             humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, true)
             humanoid.BreakJointsOnDeath = true
-            humanoid.MaxHealth = 100  -- ganti sesuai default game
+            humanoid.MaxHealth = 100  -- ganti angka default
             humanoid.Health = humanoid.MaxHealth
             humanoid.HealthDisplayDistance = 100
             humanoid.NameDisplayDistance = 100
@@ -313,9 +342,8 @@ local function OnCharacterAdded(newChar)
     humanoid = character:WaitForChild("Humanoid")
     rootPart = character:WaitForChild("HumanoidRootPart")
 
-    -- Kalau god mode sedang aktif, reapply
     if isGodMode then
-        ApplyGodMode25()
+        ApplyGodMode()
     end
 end
 
@@ -349,15 +377,15 @@ btnGod.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
 btnGod.MouseButton1Click:Connect(function()
     isGodMode = not isGodMode
     if isGodMode then
-        btnGod.Text = "🛡️ GOD MODE: ON (25 LAPIS)"
+        btnGod.Text = "🛡️ GOD MODE: ON (SUPER REGEN)"
         btnGod.BackgroundColor3 = Color3.fromRGB(40, 120, 40)
-        ApplyGodMode25()
+        ApplyGodMode()
     else
         btnGod.Text = "🛡️ GOD MODE: OFF"
         btnGod.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
-        RemoveGodMode25()
+        RemoveGodMode()
     end
 end)
 
-print("✅ God Mode 25 lapis aktif! Karakter tidak bisa mati, health terkunci tak terbatas.")
-print("⚠️ Catatan: Jika server full authoritative, masih ada kemungkinan mati. Gunakan server script untuk hasil 100%.")
+print("✅ God Mode Super Regen aktif! Health tidak akan berkurang, MaxHealth terkunci, dan mati tidak mungkin.")
+print("⚠️ Catatan: Jika server full authoritative (server yang mutusin semua), client-side tidak bisa 100% mencegah kematian. Gunakan server script di bawah ini.")
