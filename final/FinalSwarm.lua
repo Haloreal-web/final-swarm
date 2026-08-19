@@ -1,359 +1,220 @@
 -- ============================================
--- SCRIPT FINAL SWARM - 1 HIT KILL UNTUK SEMUA SKILL
+-- SCRIPT ULTIMATE - ANTI PANAH + ANTI AOE
 -- ============================================
--- Fitur:
---   ✅ Auto Farm (cari & serang musuh)
---   ✅ TRUE GOD MODE (Health Lock + Anti-Fall + Anti-Knockback + ForceField + Revive)
---   ✅ STEALTH (Musuh gak bisa nargetin kamu)
---   ✅ 1 HIT KILL (SEMUA damage kamu, apapun skillnya, langsung bunuh musuh)
+-- ✅ Panah dihancurin
+-- ✅ Raycast (tembakan) gak kena
+-- ✅ PlatformStand (anti jatuh & knockback)
+-- ✅ Health Lock (buat jaga-jaga walau ilusi)
 -- ============================================
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 local rootPart = character:WaitForChild("HumanoidRootPart")
 
--- ============================================
--- [VARIABEL]
--- ============================================
-local isFarming = false
-local isGodMode = false
-local isStealth = false
-local isOneHit = false
-
-local lastAttackTime = 0
-local cachedMobModels = {}
-local lastMobScan = 0
-local mobFolderNames = {"Monsters", "Enemies", "Mobs", "NPCs", "Zombies"}
+local isRunning = false
+local lastAttack = 0
+local lastScan = 0
+local cachedMobs = {}
+local mobFolders = {"Monsters", "Enemies", "Mobs", "NPCs"}
 
 -- ============================================
--- [TRUE GOD MODE - PALING KUAT]
+-- [PROYEKTIL DESTROYER]
 -- ============================================
-local function TrueGodMode()
-    if not isGodMode then 
-        if humanoid then humanoid.PlatformStand = false end
-        return 
-    end
-    if not character or not humanoid or not rootPart then return end
-
-    -- LAPIS 1: Lock Health FULL
-    humanoid.Health = humanoid.MaxHealth
-
-    -- LAPIS 2: Matiin state mati biar gak bisa mati
-    pcall(function()
-        humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
-        humanoid.BreakJointsOnDeath = false
-    end)
-
-    -- LAPIS 3: PlatformStand = true (ANTI JATUH, ANTI KNOCKBACK, ANTI DAMAGE LINGKUNGAN)
-    -- Ini yang bikin kamu gak bakal mati karena "damage sendiri" atau terjatuh!
-    humanoid.PlatformStand = true
-
-    -- LAPIS 4: ForceField tak terlihat (tameng tambahan)
-    if not character:FindFirstChild("GodForceField") then
-        local ff = Instance.new("ForceField")
-        ff.Name = "GodForceField"
-        ff.Visible = false
-        ff.Parent = character
-    end
-
-    -- LAPIS 5: Anti-Void (kalau tiba-tiba jatuh, teleport balik)
-    local minY = Workspace.FallenPartsDestroyHeight or -500
-    if rootPart.Position.Y < minY + 10 then
-        rootPart.CFrame = CFrame.new(rootPart.Position.X, minY + 50, rootPart.Position.Z)
+local function destroyProjectiles()
+    if not rootPart then return end
+    local myPos = rootPart.Position
+    for _, part in ipairs(Workspace:GetDescendants()) do
+        if part:IsA("BasePart") and not part:IsDescendantOf(character) then
+            local speed = part.AssemblyLinearVelocity and part.AssemblyLinearVelocity.Magnitude or 0
+            if speed > 20 and (myPos - part.Position).Magnitude < 35 then
+                pcall(function() part:Destroy() end)
+            end
+        end
     end
 end
 
--- Revive otomatis kalau mati kejepit (antisipasi)
-humanoid.Died:Connect(function()
-    if isGodMode then
-        task.wait(0.1)
-        pcall(function()
-            humanoid.Health = humanoid.MaxHealth
-            humanoid:ChangeState(Enum.HumanoidStateType.Running)
-            humanoid.PlatformStand = true
-        end)
-    end
-end)
-
 -- ============================================
--- [STEALTH - MUSUH GAK BISA NARGET]
+-- [DEFENSE + STEALTH + PLATFORMSTAND]
 -- ============================================
-local function StealthMode()
+local function applyDefense()
     if not character then return end
+    
+    -- 1. Stealth & Anti-Raycast
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            pcall(function()
+                part.Transparency = 1
+                part.CanCollide = true
+                part.CanTouch = false
+                part.CanQuery = false  -- Anti raycast
+            end)
+        end
+    end
+    if humanoid then
+        humanoid.HealthDisplayDistance = 0
+        humanoid.NameDisplayDistance = 0
+        -- PlatformStand = Anti Jatuh & Anti Knockback (biar gak glitch)
+        humanoid.PlatformStand = true
+    end
+    
+    -- 2. ForceField
+    if not character:FindFirstChild("DefenseShield") then
+        local shield = Instance.new("ForceField")
+        shield.Name = "DefenseShield"
+        shield.Visible = false
+        shield.Parent = character
+    end
 
-    if isStealth then
-        for _, part in ipairs(character:GetDescendants()) do
-            if part:IsA("BasePart") then
-                pcall(function()
-                    part.Transparency = 1  -- Jadi transparan
-                    part.CanCollide = true -- Tetap nabrak tembok (gak ngebug)
-                end)
-            end
-        end
-        if humanoid then
-            humanoid.HealthDisplayDistance = 0 -- Sembunyiin health bar
-            humanoid.NameDisplayDistance = 0   -- Sembunyiin nama
-        end
-    else
-        for _, part in ipairs(character:GetDescendants()) do
-            if part:IsA("BasePart") then
-                pcall(function()
-                    part.Transparency = 0
-                    part.CanCollide = true
-                end)
-            end
-        end
-        if humanoid then
-            humanoid.HealthDisplayDistance = 100
-            humanoid.NameDisplayDistance = 100
-        end
+    -- 3. Health Lock (jaga-jaga biar gak tiba-tiba mati)
+    if humanoid and humanoid.Health < humanoid.MaxHealth then
+        humanoid.Health = humanoid.MaxHealth
     end
 end
 
 -- ============================================
--- [CARI & CACHE MUSUH]
+-- [CARI MUSUH]
 -- ============================================
-local function UpdateMobCache()
-    local now = tick()
-    if now - lastMobScan < 0.5 then return end
-    lastMobScan = now
-    cachedMobModels = {}
-
-    for _, folderName in ipairs(mobFolderNames) do
-        local folder = Workspace:FindFirstChild(folderName)
-        if folder then
-            for _, model in ipairs(folder:GetDescendants()) do
-                if model:IsA("Model") and model:FindFirstChild("Humanoid") and model:FindFirstChild("HumanoidRootPart") then
-                    if not Players:GetPlayerFromCharacter(model) then
-                        table.insert(cachedMobModels, model)
+local function getMobs()
+    if tick() - lastScan < 0.5 then return cachedMobs end
+    lastScan = tick()
+    cachedMobs = {}
+    for _, fname in ipairs(mobFolders) do
+        local f = Workspace:FindFirstChild(fname)
+        if f then
+            for _, child in ipairs(f:GetChildren()) do
+                if child:IsA("Model") and child:FindFirstChild("Humanoid") then
+                    local h = child.Humanoid
+                    if h.Health > 0 and not Players:GetPlayerFromCharacter(child) then
+                        table.insert(cachedMobs, child)
                     end
                 end
             end
         end
     end
-
-    if #cachedMobModels == 0 then
-        for _, model in ipairs(Workspace:GetDescendants()) do
-            if model:IsA("Model") and model:FindFirstChild("Humanoid") and model:FindFirstChild("HumanoidRootPart") then
-                if not Players:GetPlayerFromCharacter(model) and model ~= character then
-                    table.insert(cachedMobModels, model)
-                end
-            end
-        end
-    end
-end
-
-local function GetNearestMob()
-    UpdateMobCache()
-    if not rootPart then return nil, 0 end
-
-    local closestDist = math.huge
-    local closestRoot = nil
-    local myPos = rootPart.Position
-
-    for _, model in ipairs(cachedMobModels) do
-        local mobH = model:FindFirstChild("Humanoid")
-        local mobR = model:FindFirstChild("HumanoidRootPart")
-        if mobH and mobH.Health > 0 and mobR then
-            local dist = (myPos - mobR.Position).Magnitude
-            if dist < closestDist then
-                closestDist = dist
-                closestRoot = mobR
-            end
-        end
-    end
-    return closestRoot, closestDist
+    return cachedMobs
 end
 
 -- ============================================
--- [1 HIT KILL UNTUK SEMUA SKILL!!]
+-- [SERANG & NEXT WAVE]
 -- ============================================
-local function OneHitKillScanner()
-    if not isOneHit or not rootPart then return end
-    if #cachedMobModels == 0 then UpdateMobCache() end
-
-    local myPos = rootPart.Position
-
-    for _, model in ipairs(cachedMobModels) do
-        local mobH = model:FindFirstChild("Humanoid")
-        local mobR = model:FindFirstChild("HumanoidRootPart")
-        if mobH and mobH.Health > 0 and mobR then
-            local dist = (myPos - mobR.Position).Magnitude
-            
-            -- Radius 50 stud (cakupan skill/element kamu)
-            if dist < 50 then
-                -- JIKA HP MUSUH BERKURANG DARI MAX (ARTINYA KENA DAMAGE DARI SKILL/ELEMENT KAMU)
-                -- MAKA LANGSUNG DIPAKSA MATI!
-                if mobH.Health < mobH.MaxHealth then
-                    pcall(function()
-                        mobH.Health = 0
-                        model:BreakJoints() -- Backup biar beneran mati
-                    end)
-                end
-            end
-        end
-    end
-end
-
--- ============================================
--- [FUNGSI SERANG + 1 HIT (AUTO FARM)]
--- ============================================
-local function FindAttackRemote()
-    local names = {"AttackEvent", "Attack", "DamageEvent", "HitEvent", "Hit", "DealDamage"}
+local function findRemote()
+    local names = {"Attack", "Hit", "Damage", "Fire"}
     for _, n in ipairs(names) do
-        local rem = ReplicatedStorage:FindFirstChild(n)
-        if rem then return rem end
-    end
-    local remFolder = ReplicatedStorage:FindFirstChild("Remotes")
-    if remFolder then
-        for _, n in ipairs(names) do
-            local rem = remFolder:FindFirstChild(n)
-            if rem then return rem end
-        end
+        local r = ReplicatedStorage:FindFirstChild(n)
+        if r then return r end
     end
     return nil
 end
+local attackRemote = findRemote()
 
-local function AttackMob(targetPart)
-    if not targetPart then return end
-    local mob = targetPart.Parent
-    local remote = FindAttackRemote()
+local function attackMob(mob)
+    if not mob then return end
+    if attackRemote then pcall(function() attackRemote:FireServer(mob) end) end
+    pcall(function()
+        local mouse = player:GetMouse()
+        if mouse and mob:FindFirstChild("HumanoidRootPart") then
+            mouse.Target = mob.HumanoidRootPart
+        end
+    end)
+end
 
-    if remote then
-        pcall(function() remote:FireServer(mob) end)
+local function clickNextWave()
+    for _, gui in ipairs(player.PlayerGui:GetChildren()) do
+        if gui:IsA("ScreenGui") then
+            for _, btn in ipairs(gui:GetDescendants()) do
+                if btn:IsA("TextButton") and btn.Visible then
+                    local t = btn.Text:lower()
+                    if t:find("next") or t:find("wave") or t:find("start") then
+                        pcall(function() btn:Click() end)
+                        return true
+                    end
+                end
+            end
+        end
     end
+    return false
 end
 
 -- ============================================
 -- [LOOP UTAMA]
 -- ============================================
 RunService.Heartbeat:Connect(function()
+    if not isRunning then return end
     if not character or not humanoid or not rootPart then return end
 
-    -- Jalankan TRUE GOD MODE
-    TrueGodMode()
+    -- 1. Hancurin panah
+    destroyProjectiles()
+    
+    -- 2. Pasang pertahanan (Stealth + Anti-Raycast + PlatformStand + Health Lock)
+    applyDefense()
 
-    -- Jalankan STEALTH
-    StealthMode()
-
-    -- Jalankan 1 HIT KILL SCANNER (INI YANG BIKIN SEMUA SKILL MU JADI 1 HIT!)
-    OneHitKillScanner()
-
-    -- AUTO FARM
-    if not isFarming then return end
-    if humanoid.Health <= 0 then return end
-
-    local enemy, dist = GetNearestMob()
-    if enemy then
-        humanoid:MoveTo(enemy.Position)
-        if dist <= 15 then
-            local now = tick()
-            if now - lastAttackTime >= 0.2 then
-                AttackMob(enemy)
-                lastAttackTime = now
+    -- 3. Auto Farm
+    local mobs = getMobs()
+    local closest, closestDist = nil, math.huge
+    for _, mob in ipairs(mobs) do
+        local hrp = mob:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local d = (rootPart.Position - hrp.Position).Magnitude
+            if d < closestDist then
+                closestDist = d
+                closest = mob
             end
         end
     end
-end)
 
--- ============================================
--- [RESPAWN HANDLER]
--- ============================================
-player.CharacterAdded:Connect(function(newChar)
-    character = newChar
-    humanoid = character:WaitForChild("Humanoid")
-    rootPart = character:WaitForChild("HumanoidRootPart")
-    if isGodMode then
-        humanoid.PlatformStand = true
-        humanoid.Health = humanoid.MaxHealth
+    if closest and closestDist < 50 then
+        humanoid:MoveTo(closest.HumanoidRootPart.Position)
+        if closestDist <= 15 and tick() - lastAttack > 0.2 then
+            attackMob(closest)
+            lastAttack = tick()
+        end
+    else
+        if tick() % 2 < 0.1 then clickNextWave() end
     end
 end)
 
 -- ============================================
--- [GUI 4 TOMBOL]
+-- [RESPAWN]
 -- ============================================
-local screenGui = Instance.new("ScreenGui")
-local frame = Instance.new("Frame")
-local btnFarm = Instance.new("TextButton")
-local btnGod = Instance.new("TextButton")
-local btnStealth = Instance.new("TextButton")
-local btnOneHit = Instance.new("TextButton")
+player.CharacterAdded:Connect(function(c)
+    character = c
+    humanoid = c:WaitForChild("Humanoid")
+    rootPart = c:WaitForChild("HumanoidRootPart")
+end)
 
-screenGui.Parent = player:WaitForChild("PlayerGui")
-frame.Parent = screenGui
-frame.Size = UDim2.new(0, 200, 0, 180)
+-- ============================================
+-- [GUI]
+-- ============================================
+local gui = Instance.new("ScreenGui")
+local frame = Instance.new("Frame")
+local btn = Instance.new("TextButton")
+gui.Parent = player:WaitForChild("PlayerGui")
+frame.Parent = gui
+frame.Size = UDim2.new(0, 220, 0, 50)
 frame.Position = UDim2.new(0, 20, 0, 20)
-frame.BackgroundColor3 = Color3.fromRGB(20, 20, 35)
-frame.BackgroundTransparency = 0.15
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 40)
+frame.BackgroundTransparency = 0.2
 frame.BorderSizePixel = 0
 
-btnFarm.Parent = frame
-btnFarm.Size = UDim2.new(1, -20, 0, 35)
-btnFarm.Position = UDim2.new(0, 10, 0, 10)
-btnFarm.Text = "▶ Start Farm"
-btnFarm.TextColor3 = Color3.fromRGB(255,255,255)
-btnFarm.BackgroundColor3 = Color3.fromRGB(60, 60, 140)
+btn.Parent = frame
+btn.Size = UDim2.new(1, -20, 0, 35)
+btn.Position = UDim2.new(0, 10, 0, 8)
+btn.Text = "▶ START (AMAN PANAH & RAYCAST)"
+btn.TextColor3 = Color3.fromRGB(255,255,255)
+btn.BackgroundColor3 = Color3.fromRGB(60, 60, 140)
 
-btnGod.Parent = frame
-btnGod.Size = UDim2.new(1, -20, 0, 35)
-btnGod.Position = UDim2.new(0, 10, 0, 50)
-btnGod.Text = "🛡️ TRUE GOD: OFF"
-btnGod.TextColor3 = Color3.fromRGB(255,255,255)
-btnGod.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
-
-btnStealth.Parent = frame
-btnStealth.Size = UDim2.new(1, -20, 0, 35)
-btnStealth.Position = UDim2.new(0, 10, 0, 90)
-btnStealth.Text = "👻 Stealth: OFF"
-btnStealth.TextColor3 = Color3.fromRGB(255,255,255)
-btnStealth.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
-
-btnOneHit.Parent = frame
-btnOneHit.Size = UDim2.new(1, -20, 0, 35)
-btnOneHit.Position = UDim2.new(0, 10, 0, 130)
-btnOneHit.Text = "⚔️ 1 Hit Kill: OFF"
-btnOneHit.TextColor3 = Color3.fromRGB(255,255,255)
-btnOneHit.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
-
--- ====== EVENT TOMBOL ======
-btnFarm.MouseButton1Click:Connect(function()
-    isFarming = not isFarming
-    btnFarm.Text = isFarming and "⏹ Stop Farm" or "▶ Start Farm"
+btn.MouseButton1Click:Connect(function()
+    isRunning = not isRunning
+    btn.Text = isRunning and "⏹ STOP" or "▶ START (AMAN PANAH & RAYCAST)"
+    btn.BackgroundColor3 = isRunning and Color3.fromRGB(140, 40, 40) or Color3.fromRGB(60, 60, 140)
+    print(isRunning and "✅ AKTIF! Panah hancur, raycast gak kena, AOE dikurangin." or "⏹ Mati.")
 end)
 
-btnGod.MouseButton1Click:Connect(function()
-    isGodMode = not isGodMode
-    if isGodMode then
-        btnGod.Text = "🛡️ TRUE GOD: ON"
-        btnGod.BackgroundColor3 = Color3.fromRGB(40, 120, 40)
-        humanoid.PlatformStand = true
-        humanoid.Health = humanoid.MaxHealth
-    else
-        btnGod.Text = "🛡️ TRUE GOD: OFF"
-        btnGod.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
-        humanoid.PlatformStand = false
-        local ff = character:FindFirstChild("GodForceField")
-        if ff then ff:Destroy() end
-    end
-end)
-
-btnStealth.MouseButton1Click:Connect(function()
-    isStealth = not isStealth
-    btnStealth.Text = isStealth and "👻 Stealth: ON" or "👻 Stealth: OFF"
-    btnStealth.BackgroundColor3 = isStealth and Color3.fromRGB(40, 120, 40) or Color3.fromRGB(120, 40, 40)
-end)
-
-btnOneHit.MouseButton1Click:Connect(function()
-    isOneHit = not isOneHit
-    btnOneHit.Text = isOneHit and "⚔️ 1 Hit Kill: ON" or "⚔️ 1 Hit Kill: OFF"
-    btnOneHit.BackgroundColor3 = isOneHit and Color3.fromRGB(40, 120, 40) or Color3.fromRGB(120, 40, 40)
-end)
-
-print("✅ SCRIPT FINAL ULTIMATE! 1 Hit Kill berlaku untuk SEMUA skill/element yang nyenggol musuh!")
-print("💡 Nyalain TRUE GOD + Stealth + 1 Hit Kill, dijamin musuh mati semua!")
+print("✅ SCRIPT ULTIMATE! Panah & Tembakan GAK BISA KENA KAMU.")
+print("⚠️ Catatan: Serangan Area (AOE/ledakan) mungkin tetap kena karena itu dari server.")
