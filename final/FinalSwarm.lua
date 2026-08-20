@@ -1,5 +1,5 @@
 -- ============================================================
--- AUTO FOLLOW PRO v10 - FIXED & OPTIMIZED
+-- AUTO FOLLOW PRO v11 - UI FIXED, DRAG & SCROLL
 -- ============================================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -20,7 +20,7 @@ local cloneList = {}
 local MAX_CLONES = 50
 local noclipBody = nil
 local originalCanCollide = {}
-local originalCanCollideInitialized = false -- penanda apakah state asli sudah disimpan
+local originalCanCollideInitialized = false
 
 -- Auto Dodge
 local autoDodgeOn = false
@@ -33,8 +33,11 @@ local dodgeCooldown = 1.0
 -- statusLabel di-forward declare
 local statusLabel
 
--- Simpan koneksi untuk bisa diputus saat GUI ditutup
-local connections = {}
+-- Koneksi untuk cleanup
+local followConnection
+local autoDodgeConnection
+local playerAddedConnection
+local playerRemovingConnection
 
 -- ===== FUNGSI DASAR =====
 local function isAlive(obj)
@@ -57,14 +60,11 @@ local function updateSelf(newChar)
     if not isAlive(char) or not hum or not root then
         char, hum, root = nil, nil, nil
     else
-        -- Reset penyimpanan CanCollide jika karakter berganti
         if char ~= oldChar then
             originalCanCollide = {}
             originalCanCollideInitialized = false
         end
-        if noClipOn then
-            setNoClip(true)
-        end
+        if noClipOn then setNoClip(true) end
     end
 end
 
@@ -96,7 +96,6 @@ local function setNoClip(state)
     if not char or not root then return end
 
     if state then
-        -- Jika pertama kali atau karakter baru, simpan state CanCollide asli
         if not originalCanCollideInitialized then
             originalCanCollide = {}
             for _, part in ipairs(char:GetDescendants()) do
@@ -107,7 +106,6 @@ local function setNoClip(state)
             originalCanCollideInitialized = true
         end
 
-        -- Terapkan no clip ke semua bagian saat ini, simpan yang belum ada
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 if originalCanCollide[part] == nil then
@@ -117,11 +115,8 @@ local function setNoClip(state)
             end
         end
 
-        -- Buat atau pindahkan BodyVelocity ke root saat ini
         if not noclipBody or noclipBody.Parent ~= root then
-            if noclipBody then
-                noclipBody:Destroy()
-            end
+            if noclipBody then noclipBody:Destroy() end
             noclipBody = Instance.new("BodyVelocity")
             noclipBody.Velocity = Vector3.new(0, 0, 0)
             noclipBody.MaxForce = Vector3.new(100000, 100000, 100000)
@@ -129,14 +124,12 @@ local function setNoClip(state)
         end
         noclipBody.Velocity = Vector3.new(0, 0, 0)
     else
-        -- Kembalikan CanCollide asli
         for part, original in pairs(originalCanCollide) do
             if part and part.Parent then
                 part.CanCollide = original
             end
         end
 
-        -- Hancurkan BodyVelocity
         if noclipBody then
             noclipBody:Destroy()
             noclipBody = nil
@@ -162,22 +155,17 @@ local function spawnClone()
         return
     end
 
-    -- Hapus clone tertua jika melebihi batas
     while #cloneList >= MAX_CLONES do
         local oldest = table.remove(cloneList, 1)
-        if oldest and oldest.Parent then
-            oldest:Destroy()
-        end
+        if oldest and oldest.Parent then oldest:Destroy() end
     end
 
     local clone = player.Character:Clone()
 
-    -- Buang semua script agar tidak error
     for _, desc in ipairs(clone:GetDescendants()) do
         if desc:IsA("Script") or desc:IsA("LocalScript") or desc:IsA("ModuleScript") then
             desc:Destroy()
         end
-        -- Hapus juga Humanoid dan Animator di semua descendant
         if desc:IsA("Humanoid") or desc:IsA("Animator") then
             desc:Destroy()
         end
@@ -186,14 +174,12 @@ local function spawnClone()
     clone.Parent = workspace
     clone.Name = "Clone_" .. player.Name .. "_" .. (#cloneList + 1)
 
-    -- Hitung posisi acak di sekitar target
     local angle = math.random() * 2 * math.pi
     local radius = math.random(15, 60)
     local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
     local pos = targetRoot.Position + offset
     pos = Vector3.new(pos.X, targetRoot.Position.Y, pos.Z)
 
-    -- Raycast ke bawah untuk mencari tanah (agar clone tidak melayang)
     local rayOrigin = pos + Vector3.new(0, 5, 0)
     local rayDirection = Vector3.new(0, -100, 0)
     local raycastParams = RaycastParams.new()
@@ -204,13 +190,11 @@ local function spawnClone()
         pos = Vector3.new(pos.X, rayResult.Position.Y + 3, pos.Z)
     end
 
-    -- Set posisi root clone
     local rootPart = clone:FindFirstChild("HumanoidRootPart")
     if rootPart then
         rootPart.CFrame = CFrame.new(pos)
     end
 
-    -- Anchor semua bagian agar clone diam
     for _, part in ipairs(clone:GetDescendants()) do
         if part:IsA("BasePart") then
             part.Anchored = true
@@ -224,9 +208,7 @@ end
 
 local function removeAllClones()
     for _, cl in ipairs(cloneList) do
-        if cl and cl.Parent then
-            cl:Destroy()
-        end
+        if cl and cl.Parent then cl:Destroy() end
     end
     cloneList = {}
     if statusLabel then statusLabel.Text = "Semua clone dihapus" end
@@ -244,18 +226,14 @@ local function teleportToTarget()
         return
     end
 
-    -- Teleport 3 stud di samping target (agar tidak bertumpuk)
     local offset = targetRoot.CFrame.RightVector * 3
-    local newCFrame = targetRoot.CFrame + offset
-    root.CFrame = newCFrame
+    root.CFrame = targetRoot.CFrame + offset
 
     if statusLabel then statusLabel.Text = "Teleport ke " .. targetPlayer end
 end
 
 -- ===== AUTO DODGE =====
--- Fungsi untuk mendapatkan part di radius tertentu dengan fallback yang aman
 local function getPartsInRadius(center, radius)
-    -- Gunakan FindPartsInRegion3 (masih tersedia, meski deprecated)
     local region = Region3.new(
         center - Vector3.new(radius, radius, radius),
         center + Vector3.new(radius, radius, radius)
@@ -269,7 +247,6 @@ local function performDodge()
     local side = math.random(2) == 1 and 1 or -1
     local impulse = root.CFrame.RightVector * side * 30 + Vector3.new(0, 20, 0)
 
-    -- Gunakan Velocity untuk kompatibilitas (AssemblyLinearVelocity juga didukung)
     if root.AssemblyLinearVelocity then
         root.AssemblyLinearVelocity = impulse
     elseif root.Velocity then
@@ -279,8 +256,7 @@ local function performDodge()
     if statusLabel then statusLabel.Text = "Auto Dodge!" end
 end
 
--- Loop auto dodge terpisah
-local autoDodgeConnection = RunService.Heartbeat:Connect(function()
+autoDodgeConnection = RunService.Heartbeat:Connect(function()
     if not autoDodgeOn then return end
     if not isAlive(char) or not isAlive(root) then return end
 
@@ -288,21 +264,18 @@ local autoDodgeConnection = RunService.Heartbeat:Connect(function()
     if now < nextScan then return end
     nextScan = now + scanInterval
 
-    -- Scan radius 15 stud
     local parts = getPartsInRadius(root.Position, 15)
     local currentParts = {}
 
     for _, part in ipairs(parts) do
         if part and part:IsA("BasePart") and part.Parent and part ~= root then
             local skip = false
-            -- Skip bagian dari karakter pemain mana pun
             for _, plr in ipairs(Players:GetPlayers()) do
                 if plr.Character and part:IsDescendantOf(plr.Character) then
                     skip = true
                     break
                 end
             end
-            -- Skip clone list
             if not skip then
                 for _, cl in ipairs(cloneList) do
                     if part:IsDescendantOf(cl) then
@@ -317,7 +290,6 @@ local autoDodgeConnection = RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- Hitung kecepatan objek yang terlihat sebelumnya
     if lastPositions then
         for part, oldPos in pairs(lastPositions) do
             if part.Parent and currentParts[part] then
@@ -342,7 +314,7 @@ local autoDodgeConnection = RunService.Heartbeat:Connect(function()
 end)
 
 -- ===== LOOP FOLLOW =====
-local followConnection = RunService.Heartbeat:Connect(function()
+followConnection = RunService.Heartbeat:Connect(function()
     if not followOn then return end
 
     if not isAlive(char) or not isAlive(root) or not isAlive(hum) then
@@ -363,7 +335,6 @@ local followConnection = RunService.Heartbeat:Connect(function()
 
     hum:MoveTo(desiredPos)
 
-    -- Gunakan walkSpeed yang bisa diubah
     if hum.WalkSpeed ~= walkSpeed then
         hum.WalkSpeed = walkSpeed
     end
@@ -379,19 +350,21 @@ local followConnection = RunService.Heartbeat:Connect(function()
 end)
 
 -- ============================================================
--- UI CLEAN - TANPA EMOJI
+-- UI CLEAN & SCROLLABLE
 -- ============================================================
 local gui = Instance.new("ScreenGui")
 gui.ResetOnSpawn = false
 gui.Name = "AutoFollowPro"
 gui.Parent = player:WaitForChild("PlayerGui")
 
+-- Main frame (lebih kecil)
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 320, 0, 470)
-mainFrame.Position = UDim2.new(0.5, -160, 0.5, -235)
-mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+mainFrame.Size = UDim2.new(0, 300, 0, 340)
+mainFrame.Position = UDim2.new(0.5, -150, 0.5, -170)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 mainFrame.BorderSizePixel = 0
 mainFrame.ClipsDescendants = true
+mainFrame.Active = true -- agar bisa drag
 mainFrame.Parent = gui
 
 local corner = Instance.new("UICorner")
@@ -400,9 +373,10 @@ corner.Parent = mainFrame
 
 -- Title bar
 local titleBar = Instance.new("Frame")
-titleBar.Size = UDim2.new(1, 0, 0, 32)
-titleBar.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+titleBar.Size = UDim2.new(1, 0, 0, 28)
+titleBar.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
 titleBar.BorderSizePixel = 0
+titleBar.Active = true -- penting untuk drag
 titleBar.Parent = mainFrame
 
 local titleCorner = Instance.new("UICorner")
@@ -411,25 +385,25 @@ titleCorner.Parent = titleBar
 
 local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -60, 1, 0)
-titleLabel.Position = UDim2.new(0, 12, 0, 0)
+titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "AUTO FOLLOW PRO v10"
+titleLabel.Text = "AUTO FOLLOW"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.Font = Enum.Font.SourceSansBold
-titleLabel.TextSize = 16
+titleLabel.TextSize = 14
 titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 titleLabel.Parent = titleBar
 
 -- Close
 local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 28, 0, 28)
-closeBtn.Position = UDim2.new(1, -32, 0, 2)
+closeBtn.Size = UDim2.new(0, 24, 0, 24)
+closeBtn.Position = UDim2.new(1, -28, 0, 2)
 closeBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
 closeBtn.BorderSizePixel = 0
 closeBtn.Text = "X"
 closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 closeBtn.Font = Enum.Font.SourceSansBold
-closeBtn.TextSize = 16
+closeBtn.TextSize = 14
 closeBtn.Parent = titleBar
 local closeCorner = Instance.new("UICorner")
 closeCorner.CornerRadius = UDim.new(0, 4)
@@ -437,215 +411,171 @@ closeCorner.Parent = closeBtn
 
 -- Minimize
 local minBtn = Instance.new("TextButton")
-minBtn.Size = UDim2.new(0, 28, 0, 28)
-minBtn.Position = UDim2.new(1, -62, 0, 2)
+minBtn.Size = UDim2.new(0, 24, 0, 24)
+minBtn.Position = UDim2.new(1, -54, 0, 2)
 minBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
 minBtn.BorderSizePixel = 0
 minBtn.Text = "-"
 minBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 minBtn.Font = Enum.Font.SourceSansBold
-minBtn.TextSize = 20
+minBtn.TextSize = 18
 minBtn.Parent = titleBar
 local minCorner = Instance.new("UICorner")
 minCorner.CornerRadius = UDim.new(0, 4)
 minCorner.Parent = minBtn
 
--- Konten
-local content = Instance.new("Frame")
-content.Size = UDim2.new(1, -20, 1, -42)
-content.Position = UDim2.new(0, 10, 0, 38)
-content.BackgroundTransparency = 1
-content.Parent = mainFrame
+-- Scrolling frame untuk konten
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Size = UDim2.new(1, 0, 1, -28)
+scrollFrame.Position = UDim2.new(0, 0, 0, 28)
+scrollFrame.BackgroundTransparency = 1
+scrollFrame.BorderSizePixel = 0
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollFrame.ScrollBarThickness = 4
+scrollFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scrollFrame.Parent = mainFrame
 
--- Tombol Jaga Jarak
-local btnKeepDistance = Instance.new("TextButton")
-btnKeepDistance.Size = UDim2.new(0.48, 0, 0, 30)
-btnKeepDistance.Position = UDim2.new(0, 0, 0, 0)
-btnKeepDistance.Text = "Jaga Jarak"
-btnKeepDistance.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnKeepDistance.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-btnKeepDistance.BorderSizePixel = 0
-btnKeepDistance.Font = Enum.Font.SourceSansBold
-btnKeepDistance.TextSize = 13
-btnKeepDistance.Parent = content
-local corner1 = Instance.new("UICorner")
-corner1.CornerRadius = UDim.new(0, 4)
-corner1.Parent = btnKeepDistance
+-- UIListLayout untuk konten scroll
+local uiList = Instance.new("UIListLayout")
+uiList.SortOrder = Enum.SortOrder.LayoutOrder
+uiList.Padding = UDim.new(0, 4)
+uiList.Parent = scrollFrame
 
--- Tombol Dekati
-local btnClose = Instance.new("TextButton")
-btnClose.Size = UDim2.new(0.48, 0, 0, 30)
-btnClose.Position = UDim2.new(0.52, 0, 0, 0)
-btnClose.Text = "Dekati"
-btnClose.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnClose.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-btnClose.BorderSizePixel = 0
-btnClose.Font = Enum.Font.SourceSansBold
-btnClose.TextSize = 13
-btnClose.Parent = content
-local corner2 = Instance.new("UICorner")
-corner2.CornerRadius = UDim.new(0, 4)
-corner2.Parent = btnClose
+-- Helper untuk membuat tombol
+local function createButton(parent, text, layoutOrder, height)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -10, 0, height or 28)
+    btn.Position = UDim2.new(0, 5, 0, 0)
+    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    btn.BorderSizePixel = 0
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.SourceSansBold
+    btn.TextSize = 13
+    btn.LayoutOrder = layoutOrder
+    btn.Parent = parent
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 4)
+    btnCorner.Parent = btn
+    return btn
+end
+
+-- Helper untuk membuat label
+local function createLabel(parent, text, layoutOrder, height)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -10, 0, height or 18)
+    lbl.Position = UDim2.new(0, 5, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = text
+    lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+    lbl.Font = Enum.Font.SourceSans
+    lbl.TextSize = 12
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.LayoutOrder = layoutOrder
+    lbl.Parent = parent
+    return lbl
+end
+
+-- Konten UI
+local layoutOrder = 0
+
+-- Tombol follow
+local btnKeepDistance = createButton(scrollFrame, "Jaga Jarak", layoutOrder)
+layoutOrder = layoutOrder + 1
+local btnClose = createButton(scrollFrame, "Dekati", layoutOrder)
+layoutOrder = layoutOrder + 1
 
 -- Status follow
-local followStatus = Instance.new("TextLabel")
-followStatus.Size = UDim2.new(1, 0, 0, 18)
-followStatus.Position = UDim2.new(0, 0, 0, 34)
-followStatus.BackgroundTransparency = 1
-followStatus.Text = "Follow: OFF"
-followStatus.TextColor3 = Color3.fromRGB(200, 200, 200)
-followStatus.Font = Enum.Font.SourceSans
-followStatus.TextSize = 13
-followStatus.TextXAlignment = Enum.TextXAlignment.Left
-followStatus.Parent = content
+local followStatus = createLabel(scrollFrame, "Follow: OFF", layoutOrder)
+layoutOrder = layoutOrder + 1
 
--- Frame daftar target
-local targetListFrame = Instance.new("ScrollingFrame")
-targetListFrame.Size = UDim2.new(1, 0, 0, 100)
-targetListFrame.Position = UDim2.new(0, 0, 0, 58)
-targetListFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
-targetListFrame.BorderSizePixel = 0
-targetListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-targetListFrame.ScrollBarThickness = 6
-targetListFrame.Parent = content
-local listCorner = Instance.new("UICorner")
-listCorner.CornerRadius = UDim.new(0, 4)
-listCorner.Parent = targetListFrame
+-- Label daftar target
+local targetListLabel = createLabel(scrollFrame, "Daftar Target:", layoutOrder, 16)
+layoutOrder = layoutOrder + 1
 
--- Tombol Spawn Clone
-local btnSpawnClone = Instance.new("TextButton")
-btnSpawnClone.Size = UDim2.new(0.48, 0, 0, 30)
-btnSpawnClone.Position = UDim2.new(0, 0, 0, 165)
-btnSpawnClone.Text = "Spawn Clone"
-btnSpawnClone.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnSpawnClone.BackgroundColor3 = Color3.fromRGB(120, 80, 140)
-btnSpawnClone.BorderSizePixel = 0
-btnSpawnClone.Font = Enum.Font.SourceSansBold
-btnSpawnClone.TextSize = 13
-btnSpawnClone.Parent = content
-local corner3 = Instance.new("UICorner")
-corner3.CornerRadius = UDim.new(0, 4)
-corner3.Parent = btnSpawnClone
+-- Container daftar target (dinamis)
+local targetListContainer = Instance.new("Frame")
+targetListContainer.Size = UDim2.new(1, -10, 0, 0)
+targetListContainer.Position = UDim2.new(0, 5, 0, 0)
+targetListContainer.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+targetListContainer.BorderSizePixel = 0
+targetListContainer.LayoutOrder = layoutOrder
+targetListContainer.Parent = scrollFrame
+local containerCorner = Instance.new("UICorner")
+containerCorner.CornerRadius = UDim.new(0, 4)
+containerCorner.Parent = targetListContainer
 
--- Tombol Hapus Semua Clone
-local btnRemoveAllClone = Instance.new("TextButton")
-btnRemoveAllClone.Size = UDim2.new(0.48, 0, 0, 30)
-btnRemoveAllClone.Position = UDim2.new(0.52, 0, 0, 165)
-btnRemoveAllClone.Text = "Hapus Semua"
-btnRemoveAllClone.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnRemoveAllClone.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-btnRemoveAllClone.BorderSizePixel = 0
-btnRemoveAllClone.Font = Enum.Font.SourceSansBold
-btnRemoveAllClone.TextSize = 13
-btnRemoveAllClone.Parent = content
-local corner4 = Instance.new("UICorner")
-corner4.CornerRadius = UDim.new(0, 4)
-corner4.Parent = btnRemoveAllClone
+local targetListLayout = Instance.new("UIListLayout")
+targetListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+targetListLayout.Padding = UDim.new(0, 2)
+targetListLayout.Parent = targetListContainer
 
--- Tombol No Clip
-local btnNoClip = Instance.new("TextButton")
-btnNoClip.Size = UDim2.new(0.48, 0, 0, 30)
-btnNoClip.Position = UDim2.new(0, 0, 0, 200)
-btnNoClip.Text = "No Clip: OFF"
-btnNoClip.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnNoClip.BackgroundColor3 = Color3.fromRGB(150, 100, 60)
-btnNoClip.BorderSizePixel = 0
-btnNoClip.Font = Enum.Font.SourceSansBold
-btnNoClip.TextSize = 13
-btnNoClip.Parent = content
-local corner5 = Instance.new("UICorner")
-corner5.CornerRadius = UDim.new(0, 4)
-corner5.Parent = btnNoClip
+layoutOrder = layoutOrder + 1
 
--- Speed Label
-local speedLabel = Instance.new("TextLabel")
-speedLabel.Size = UDim2.new(1, 0, 0, 20)
-speedLabel.Position = UDim2.new(0, 0, 0, 235)
-speedLabel.BackgroundTransparency = 1
-speedLabel.Text = "Kecepatan: " .. walkSpeed
-speedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-speedLabel.Font = Enum.Font.SourceSans
-speedLabel.TextSize = 13
-speedLabel.TextXAlignment = Enum.TextXAlignment.Left
-speedLabel.Parent = content
+-- Tombol spawn clone
+local btnSpawnClone = createButton(scrollFrame, "Spawn Clone", layoutOrder)
+layoutOrder = layoutOrder + 1
+local btnRemoveAllClone = createButton(scrollFrame, "Hapus Semua", layoutOrder)
+layoutOrder = layoutOrder + 1
 
--- Speed Input
+-- Tombol no clip
+local btnNoClip = createButton(scrollFrame, "No Clip: OFF", layoutOrder)
+layoutOrder = layoutOrder + 1
+
+-- Speed control
+local speedLabel = createLabel(scrollFrame, "Kecepatan: " .. walkSpeed, layoutOrder)
+layoutOrder = layoutOrder + 1
 local speedInput = Instance.new("TextBox")
-speedInput.Size = UDim2.new(0.55, 0, 0, 28)
-speedInput.Position = UDim2.new(0, 0, 0, 258)
+speedInput.Size = UDim2.new(0.55, 0, 0, 26)
+speedInput.Position = UDim2.new(0, 5, 0, 0)
 speedInput.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
 speedInput.BorderSizePixel = 1
 speedInput.BorderColor3 = Color3.fromRGB(80, 80, 90)
 speedInput.Text = tostring(walkSpeed)
 speedInput.TextColor3 = Color3.fromRGB(255, 255, 255)
 speedInput.Font = Enum.Font.SourceSans
-speedInput.TextSize = 13
-speedInput.PlaceholderText = "Masukkan angka"
-speedInput.Parent = content
+speedInput.TextSize = 12
+speedInput.PlaceholderText = "Angka"
+speedInput.LayoutOrder = layoutOrder
+speedInput.Parent = scrollFrame
 local speedCorner = Instance.new("UICorner")
 speedCorner.CornerRadius = UDim.new(0, 4)
 speedCorner.Parent = speedInput
 
--- Set Speed Button
 local btnSetSpeed = Instance.new("TextButton")
-btnSetSpeed.Size = UDim2.new(0.40, 0, 0, 28)
-btnSetSpeed.Position = UDim2.new(0.60, 0, 0, 258)
-btnSetSpeed.Text = "Set Speed"
-btnSetSpeed.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnSetSpeed.Size = UDim2.new(0.40, 0, 0, 26)
+btnSetSpeed.Position = UDim2.new(0.60, 0, 0, 0)
 btnSetSpeed.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
 btnSetSpeed.BorderSizePixel = 0
+btnSetSpeed.Text = "Set"
+btnSetSpeed.TextColor3 = Color3.fromRGB(255, 255, 255)
 btnSetSpeed.Font = Enum.Font.SourceSansBold
-btnSetSpeed.TextSize = 13
-btnSetSpeed.Parent = content
+btnSetSpeed.TextSize = 12
+btnSetSpeed.LayoutOrder = layoutOrder
+btnSetSpeed.Parent = scrollFrame
 local speedBtnCorner = Instance.new("UICorner")
 speedBtnCorner.CornerRadius = UDim.new(0, 4)
 speedBtnCorner.Parent = btnSetSpeed
 
--- Teleport Button
-local btnTeleport = Instance.new("TextButton")
-btnTeleport.Size = UDim2.new(1, 0, 0, 30)
-btnTeleport.Position = UDim2.new(0, 0, 0, 290)
-btnTeleport.Text = "Teleport ke Target"
-btnTeleport.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnTeleport.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
-btnTeleport.BorderSizePixel = 0
-btnTeleport.Font = Enum.Font.SourceSansBold
-btnTeleport.TextSize = 13
-btnTeleport.Parent = content
-local teleportCorner = Instance.new("UICorner")
-teleportCorner.CornerRadius = UDim.new(0, 4)
-teleportCorner.Parent = btnTeleport
+layoutOrder = layoutOrder + 1
 
--- Auto Dodge Button
-local btnAutoDodge = Instance.new("TextButton")
-btnAutoDodge.Size = UDim2.new(1, 0, 0, 30)
-btnAutoDodge.Position = UDim2.new(0, 0, 0, 325)
-btnAutoDodge.Text = "Auto Dodge: OFF"
-btnAutoDodge.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnAutoDodge.BackgroundColor3 = Color3.fromRGB(150, 100, 60)
-btnAutoDodge.BorderSizePixel = 0
-btnAutoDodge.Font = Enum.Font.SourceSansBold
-btnAutoDodge.TextSize = 13
-btnAutoDodge.Parent = content
-local dodgeCorner = Instance.new("UICorner")
-dodgeCorner.CornerRadius = UDim.new(0, 4)
-dodgeCorner.Parent = btnAutoDodge
+-- Teleport
+local btnTeleport = createButton(scrollFrame, "Teleport ke Target", layoutOrder)
+layoutOrder = layoutOrder + 1
 
--- Status label (di-assign ke variabel forward)
-statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, 0, 0, 18)
-statusLabel.Position = UDim2.new(0, 0, 0, 360)
-statusLabel.BackgroundTransparency = 1
-statusLabel.Text = "Pilih target dari daftar"
-statusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-statusLabel.Font = Enum.Font.SourceSans
-statusLabel.TextSize = 12
-statusLabel.TextXAlignment = Enum.TextXAlignment.Left
-statusLabel.Parent = content
+-- Auto Dodge
+local btnAutoDodge = createButton(scrollFrame, "Auto Dodge: OFF", layoutOrder)
+layoutOrder = layoutOrder + 1
+
+-- Status label
+statusLabel = createLabel(scrollFrame, "Pilih target dari daftar", layoutOrder)
+layoutOrder = layoutOrder + 1
 
 -- ===== FUNGSI UPDATE DAFTAR TARGET =====
 local function updateTargetList()
-    for _, child in ipairs(targetListFrame:GetChildren()) do
+    -- Hapus tombol lama
+    for _, child in ipairs(targetListContainer:GetChildren()) do
         if child:IsA("TextButton") then
             child:Destroy()
         end
@@ -656,16 +586,16 @@ local function updateTargetList()
     for _, plr in ipairs(plrs) do
         if plr ~= player then
             local btn = Instance.new("TextButton")
-            btn.Size = UDim2.new(1, -10, 0, 24)
+            btn.Size = UDim2.new(1, -10, 0, 22)
             btn.Position = UDim2.new(0, 5, 0, y)
+            btn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+            btn.BorderSizePixel = 0
             btn.Text = plr.Name
             btn.TextColor3 = Color3.fromRGB(220, 220, 220)
-            btn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
-            btn.BorderSizePixel = 1
-            btn.BorderColor3 = Color3.fromRGB(80, 80, 90)
             btn.Font = Enum.Font.SourceSans
-            btn.TextSize = 13
-            btn.Parent = targetListFrame
+            btn.TextSize = 12
+            btn.LayoutOrder = y
+            btn.Parent = targetListContainer
 
             local btnCorner = Instance.new("UICorner")
             btnCorner.CornerRadius = UDim.new(0, 3)
@@ -675,23 +605,25 @@ local function updateTargetList()
                 targetPlayer = plr.Name
                 updateTarget()
                 if statusLabel then statusLabel.Text = "Target: " .. targetPlayer end
-                for _, b in ipairs(targetListFrame:GetChildren()) do
+                for _, b in ipairs(targetListContainer:GetChildren()) do
                     if b:IsA("TextButton") then
                         b.BackgroundColor3 = (b == btn) and Color3.fromRGB(70, 130, 200) or Color3.fromRGB(45, 45, 50)
                     end
                 end
             end)
 
-            y = y + 26
+            y = y + 24
         end
     end
 
-    targetListFrame.CanvasSize = UDim2.new(0, 0, 0, y)
+    targetListContainer.Size = UDim2.new(1, -10, 0, y > 0 and y or 24)
+    -- Update scroll frame canvas size (automatic akan menyesuaikan, tetapi kita panggil manual)
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, scrollFrame.AbsoluteCanvasSize.Y)
 end
 
 updateTargetList()
-Players.PlayerAdded:Connect(updateTargetList)
-Players.PlayerRemoving:Connect(function(plr)
+playerAddedConnection = Players.PlayerAdded:Connect(updateTargetList)
+playerRemovingConnection = Players.PlayerRemoving:Connect(function(plr)
     updateTargetList()
     if targetPlayer == plr.Name then
         targetPlayer = nil
@@ -707,10 +639,10 @@ local function updateFollowButtons()
     local closeActive = followOn and followMode == "close"
 
     btnKeepDistance.Text = keepActive and "Jaga Jarak: ON" or "Jaga Jarak"
-    btnKeepDistance.BackgroundColor3 = keepActive and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 70)
+    btnKeepDistance.BackgroundColor3 = keepActive and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(50, 50, 60)
 
     btnClose.Text = closeActive and "Dekati: ON" or "Dekati"
-    btnClose.BackgroundColor3 = closeActive and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 70)
+    btnClose.BackgroundColor3 = closeActive and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(50, 50, 60)
 
     if followOn then
         followStatus.Text = "Follow: ON (" .. (followMode == "keep" and "jaga jarak" or "dekat") .. ")"
@@ -742,7 +674,7 @@ local function setFollow(mode)
 
     updateFollowButtons()
     if statusLabel then
-        statusLabel.Text = "Mengikuti " .. targetPlayer .. " (" .. (mode == "keep" and "jaga jarak" or "dekat") .. ")"
+        statusLabel.Text = "Mengikuti " .. targetPlayer .. " (" .. (followMode == "keep" and "jaga jarak" or "dekat") .. ")"
     end
 end
 
@@ -786,17 +718,17 @@ local function toggleMinimize()
         mainFrame.Visible = false
         if not miniFrame then
             miniFrame = Instance.new("TextButton")
-            miniFrame.Size = UDim2.new(0, 40, 0, 40)
+            miniFrame.Size = UDim2.new(0, 36, 0, 36)
             miniFrame.Position = UDim2.new(1, -50, 1, -50)
-            miniFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+            miniFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
             miniFrame.BorderSizePixel = 0
             miniFrame.Text = "AF"
             miniFrame.TextColor3 = Color3.fromRGB(255, 255, 255)
             miniFrame.Font = Enum.Font.SourceSansBold
-            miniFrame.TextSize = 14
+            miniFrame.TextSize = 12
             miniFrame.Parent = gui
             local miniCorner = Instance.new("UICorner")
-            miniCorner.CornerRadius = UDim.new(0, 10)
+            miniCorner.CornerRadius = UDim.new(0, 8)
             miniCorner.Parent = miniFrame
             miniFrame.MouseButton1Click:Connect(toggleMinimize)
         else
@@ -811,7 +743,6 @@ end
 minBtn.MouseButton1Click:Connect(toggleMinimize)
 
 -- ===== EVENT TOMBOL =====
-
 btnKeepDistance.MouseButton1Click:Connect(function()
     setFollow("keep")
 end)
@@ -840,50 +771,43 @@ end)
 btnNoClip.MouseButton1Click:Connect(function()
     local state = toggleNoClip()
     btnNoClip.Text = state and "No Clip: ON" or "No Clip: OFF"
-    btnNoClip.BackgroundColor3 = state and Color3.fromRGB(50, 180, 90) or Color3.fromRGB(150, 100, 60)
+    btnNoClip.BackgroundColor3 = state and Color3.fromRGB(50, 180, 90) or Color3.fromRGB(50, 50, 60)
     if statusLabel then statusLabel.Text = state and "No Clip aktif" or "No Clip nonaktif" end
 end)
 
--- Event Speed
 btnSetSpeed.MouseButton1Click:Connect(function()
     local newSpeed = tonumber(speedInput.Text)
     if newSpeed and newSpeed > 0 then
         walkSpeed = newSpeed
         speedLabel.Text = "Kecepatan: " .. walkSpeed
-        if hum then
-            hum.WalkSpeed = walkSpeed
-        end
+        if hum then hum.WalkSpeed = walkSpeed end
         if statusLabel then statusLabel.Text = "Kecepatan diubah ke " .. walkSpeed end
     else
         if statusLabel then statusLabel.Text = "Masukkan angka valid > 0" end
     end
 end)
 
--- Event Teleport
 btnTeleport.MouseButton1Click:Connect(function()
     teleportToTarget()
 end)
 
--- Event Auto Dodge
 btnAutoDodge.MouseButton1Click:Connect(function()
     autoDodgeOn = not autoDodgeOn
     btnAutoDodge.Text = autoDodgeOn and "Auto Dodge: ON" or "Auto Dodge: OFF"
-    btnAutoDodge.BackgroundColor3 = autoDodgeOn and Color3.fromRGB(50, 180, 90) or Color3.fromRGB(150, 100, 60)
+    btnAutoDodge.BackgroundColor3 = autoDodgeOn and Color3.fromRGB(50, 180, 90) or Color3.fromRGB(50, 50, 60)
     if statusLabel then statusLabel.Text = autoDodgeOn and "Auto Dodge aktif" or "Auto Dodge nonaktif" end
-    if not autoDodgeOn then
-        lastPositions = {}
-    end
+    if not autoDodgeOn then lastPositions = {} end
 end)
 
--- Close GUI
 closeBtn.MouseButton1Click:Connect(function()
-    -- Bersihkan semua koneksi heartbeat yang berjalan
-    followConnection:Disconnect()
-    autoDodgeConnection:Disconnect()
+    if followConnection then followConnection:Disconnect() end
+    if autoDodgeConnection then autoDodgeConnection:Disconnect() end
+    if playerAddedConnection then playerAddedConnection:Disconnect() end
+    if playerRemovingConnection then playerRemovingConnection:Disconnect() end
 
     removeAllClones()
     if noclipBody then noclipBody:Destroy() end
     gui:Destroy()
 end)
 
-print("Auto Follow Pro v10 Fixed siap. Semua fitur berfungsi optimal.")
+print("Auto Follow Pro v11 siap. UI draggable & scrollable, bersih tanpa bug.")
