@@ -1,24 +1,23 @@
 -- ============================================================
--- 🤝 AUTO FOLLOW PLAYER — NEMPEL BANGET (FIXED v2)
+-- 🤝 AUTO FOLLOW PLAYER — SUPER SPEED + AUTO JUMP
 -- ============================================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
--- Pastikan LocalPlayer sudah ada (script bisa jalan terlalu awal)
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
 local char, hum, root
 local targetChar, targetHum, targetRoot
 
 local followOn = false
-local followDistance = 3 -- jarak offset di belakang target (stud)
-
+local followDistance = 3
 local targetPlayer = nil
 local targetList = {}
 local targetIndex = 0
 
--- BUG FIX: cek Parent DAN Health, supaya karakter yang sudah mati
--- (tapi belum di-destroy/parent belum nil) tidak dianggap "alive".
+-- MODIF: kecepatan super (bisa diubah sesuka hati)
+local SUPER_SPEED = 100
+
 local function isAlive(obj)
     if not obj or obj.Parent == nil then
         return false
@@ -29,19 +28,14 @@ local function isAlive(obj)
     return true
 end
 
--- BUG FIX: HumanoidRootPart & Humanoid belum tentu langsung ada
--- saat CharacterAdded fire (masih proses loading). Pakai WaitForChild
--- dengan timeout supaya tidak dapat nil di frame pertama.
 local function updateSelf(newChar)
     char = newChar or player.Character
     if not char then
         hum, root = nil, nil
         return
     end
-
     hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
     root = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 5)
-
     if not isAlive(char) then
         char, hum, root = nil, nil, nil
     end
@@ -50,15 +44,11 @@ end
 local function updateTarget()
     targetChar, targetHum, targetRoot = nil, nil, nil
     if not targetPlayer then return end
-
     local plr = Players:FindFirstChild(targetPlayer)
     if not plr then
-        -- BUG FIX: target sudah leave game -> reset supaya UI tidak
-        -- terus2an menampilkan nama player yang sudah tidak ada
         targetPlayer = nil
         return
     end
-
     if plr and isAlive(plr.Character) then
         targetChar = plr.Character
         targetHum = targetChar:FindFirstChildOfClass("Humanoid")
@@ -81,7 +71,7 @@ player.CharacterAdded:Connect(function(newChar)
 end)
 
 -- ============================================================
--- LOOP UTAMA FOLLOW
+-- LOOP UTAMA FOLLOW — DENGAN SUPER SPEED & AUTO JUMP
 -- ============================================================
 RunService.Heartbeat:Connect(function()
     if not followOn then return end
@@ -94,34 +84,44 @@ RunService.Heartbeat:Connect(function()
     updateTarget()
     if not isAlive(targetRoot) or not isAlive(targetHum) then return end
 
-    -- Posisi ideal: di belakang target sejauh followDistance
+    -- Posisi ideal di belakang target
     local look = targetRoot.CFrame.LookVector
     local desiredPos = targetRoot.Position - (look * followDistance)
     local distToDesired = (root.Position - desiredPos).Magnitude
 
+    -- Gerak ke posisi ideal (pakai MoveTo)
     if distToDesired > 1 then
         hum:MoveTo(desiredPos)
     end
 
-    -- Ikut lompat hanya kalau target lompat & kita di tanah
-    if targetHum:GetState() == Enum.HumanoidStateType.Jumping then
+    -- ===== MODIF: SET SPEED SUPER CEPAT =====
+    -- Gak usah nyamain target, langsung pake SUPER_SPEED
+    if hum.WalkSpeed ~= SUPER_SPEED then
+        hum.WalkSpeed = SUPER_SPEED
+    end
+
+    -- ===== MODIF: AUTO JUMP AGGRESIF =====
+    local targetJumping = targetHum:GetState() == Enum.HumanoidStateType.Jumping
+    local distTotal = (root.Position - targetRoot.Position).Magnitude
+    local yDiff = targetRoot.Position.Y - root.Position.Y
+
+    -- Lompat kalau:
+    -- 1. Target lagi loncat, ATAU
+    -- 2. Jarak total > 15 (biar ngejar), ATAU
+    -- 3. Target berada di atas kita (selisih Y > 5)
+    local shouldJump = targetJumping or distTotal > 15 or yDiff > 5
+
+    if shouldJump then
         if hum.FloorMaterial ~= Enum.Material.Air and hum:GetState() ~= Enum.HumanoidStateType.Jumping then
             hum.Jump = true
         end
     end
-
-    -- Samakan kecepatan jalan target
-    if targetHum.WalkSpeed ~= hum.WalkSpeed then
-        hum.WalkSpeed = targetHum.WalkSpeed
-    end
 end)
 
 -- ============================================================
--- 🖥️ GUI PILIH TARGET (klik untuk cycle player)
+-- 🖥️ GUI (SAMA KAYAK SEBELUMNYA, TETAP)
 -- ============================================================
 local gui = Instance.new("ScreenGui")
--- BUG FIX: tanpa ini, GUI akan otomatis dihapus setiap kali karakter
--- respawn (default ResetOnSpawn = true), sehingga tombol hilang setelah mati.
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
@@ -171,28 +171,23 @@ statusLabel.Parent = frame
 
 btnFollow.MouseButton1Click:Connect(function()
     followOn = not followOn
-
     if followOn and not targetPlayer then
         followOn = false
         statusLabel.Text = "Pilih target dulu!"
     else
         statusLabel.Text = followOn and ("Mengikuti: " .. targetPlayer) or "Follow dimatikan"
     end
-
     btnFollow.Text = followOn and "FOLLOW: ON" or "FOLLOW: OFF"
     btnFollow.BackgroundColor3 = followOn and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(50, 50, 70)
 end)
 
 btnTarget.MouseButton1Click:Connect(function()
     refreshTargetList()
-
     if #targetList == 0 then
         targetPlayer = nil
         targetChar, targetHum, targetRoot = nil, nil, nil
         btnTarget.Text = "TARGET: Tidak ada player"
         statusLabel.Text = "Tidak ada player lain"
-        -- BUG FIX: kalau follow lagi nyala tapi tidak ada target lagi,
-        -- matikan follow supaya UI dan state konsisten.
         if followOn then
             followOn = false
             btnFollow.Text = "FOLLOW: OFF"
@@ -200,8 +195,6 @@ btnTarget.MouseButton1Click:Connect(function()
         end
         return
     end
-
-    -- Cari index target saat ini di daftar
     local currentIndex = 0
     if targetPlayer then
         for i, name in ipairs(targetList) do
@@ -211,18 +204,13 @@ btnTarget.MouseButton1Click:Connect(function()
             end
         end
     end
-
-    -- Pilih player berikutnya
     targetIndex = (currentIndex % #targetList) + 1
     targetPlayer = targetList[targetIndex]
-
     updateTarget()
     btnTarget.Text = "TARGET: " .. targetPlayer
     statusLabel.Text = (followOn and "Mengikuti: " or "Target: ") .. targetPlayer
 end)
 
--- BUG FIX: kalau target keluar game saat followOn aktif, UI tetap
--- menunjukkan nama lama. Loop kecil ini menjaga label tetap akurat.
 RunService.Heartbeat:Connect(function()
     if followOn and not targetPlayer then
         followOn = false
@@ -233,4 +221,4 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
-print("✅ Script Auto Follow siap! Klik TARGET untuk ganti player, lalu nyalakan FOLLOW.")
+print("✅ Auto Follow SUPER SPEED + AUTO JUMP siap! Klik TARGET, nyalakan FOLLOW, dan saksikan kecepatan gila!")
