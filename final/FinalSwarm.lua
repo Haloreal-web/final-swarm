@@ -1,23 +1,27 @@
 -- ============================================================
--- 🚀 AUTO FOLLOW PRO v6 — Spam Clone (Naruto Style)
+-- AUTO FOLLOW PRO v7 - FIXED & CLEAN
 -- ============================================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
-local mouse = player:GetMouse()
 
 -- ===== VARIABEL =====
 local char, hum, root
 local targetChar, targetHum, targetRoot
 local followOn = false
-local followDistance = 100  -- default dekat
+local followMode = "keep" -- "keep" = jaga jarak, "close" = dekati
+local followDistance = 100
 local targetPlayer = nil
 local SUPER_SPEED = 100
 local noClipOn = false
-local cloneList = {}  -- daftar clone
-local MAX_CLONES = 50  -- batas maksimal clone
+local cloneList = {}
+local MAX_CLONES = 50
+local noclipBody = nil
+
+-- statusLabel di-forward declare agar bisa diakses fungsi awal
+local statusLabel
 
 -- ===== FUNGSI DASAR =====
 local function isAlive(obj)
@@ -32,9 +36,11 @@ local function updateSelf(newChar)
         hum, root = nil, nil
         return
     end
-    hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
-    root = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 5)
-    if not isAlive(char) then
+
+    hum = char:FindFirstChildOfClass("Humanoid")
+    root = char:FindFirstChild("HumanoidRootPart")
+
+    if not isAlive(char) or not hum or not root then
         char, hum, root = nil, nil, nil
     else
         if noClipOn then setNoClip(true) end
@@ -44,15 +50,18 @@ end
 local function updateTarget()
     targetChar, targetHum, targetRoot = nil, nil, nil
     if not targetPlayer then return end
+
     local plr = Players:FindFirstChild(targetPlayer)
     if not plr then
         targetPlayer = nil
         return
     end
-    if plr and isAlive(plr.Character) then
-        targetChar = plr.Character
-        targetHum = targetChar:FindFirstChildOfClass("Humanoid")
-        targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+
+    local tChar = plr.Character
+    if tChar and isAlive(tChar) then
+        targetChar = tChar
+        targetHum = tChar:FindFirstChildOfClass("Humanoid")
+        targetRoot = tChar:FindFirstChild("HumanoidRootPart")
     end
 end
 
@@ -63,10 +72,27 @@ end)
 
 -- ===== NO CLIP =====
 local function setNoClip(state)
-    if not char then return end
+    if not char or not root then return end
+
     for _, part in ipairs(char:GetDescendants()) do
         if part:IsA("BasePart") then
             part.CanCollide = not state
+        end
+    end
+
+    if state then
+        if not noclipBody or not noclipBody.Parent then
+            noclipBody = Instance.new("BodyVelocity")
+            noclipBody.Velocity = Vector3.new(0, 0, 0)
+            noclipBody.MaxForce = Vector3.new(0, 0, 0)
+        end
+        noclipBody.Parent = root
+        noclipBody.MaxForce = Vector3.new(0, 100000, 0) -- lawan gravitasi
+        noclipBody.Velocity = Vector3.new(0, 0, 0)
+    else
+        if noclipBody then
+            noclipBody:Destroy()
+            noclipBody = nil
         end
     end
 end
@@ -80,7 +106,12 @@ end
 -- ===== SPAM CLONE =====
 local function spawnClone()
     if not targetRoot then
-        statusLabel.Text = "Target tidak valid!"
+        if statusLabel then statusLabel.Text = "Target tidak valid" end
+        return
+    end
+
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        if statusLabel then statusLabel.Text = "Karakter belum siap" end
         return
     end
 
@@ -93,10 +124,18 @@ local function spawnClone()
     end
 
     local clone = player.Character:Clone()
+
+    -- Buang script supaya tidak error
+    for _, desc in ipairs(clone:GetDescendants()) do
+        if desc:IsA("Script") or desc:IsA("LocalScript") or desc:IsA("ModuleScript") then
+            desc:Destroy()
+        end
+    end
+
     clone.Parent = workspace
     clone.Name = "Clone_" .. player.Name .. "_" .. (#cloneList + 1)
 
-    -- Posisi acak di sekitar target (radius 15–60 stud)
+    -- Posisi acak di sekitar target (radius 15-60 stud)
     local angle = math.random() * 2 * math.pi
     local radius = math.random(15, 60)
     local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
@@ -108,6 +147,14 @@ local function spawnClone()
         rootPart.CFrame = CFrame.new(pos)
     end
 
+    -- Anchor semua bagian agar clone diam
+    for _, part in ipairs(clone:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Anchored = true
+            part.CanCollide = false
+        end
+    end
+
     local humClone = clone:FindFirstChildOfClass("Humanoid")
     if humClone then
         humClone.PlatformStand = true
@@ -115,15 +162,8 @@ local function spawnClone()
         humClone.JumpPower = 0
     end
 
-    -- No clip untuk clone (biar gak aneh)
-    for _, part in ipairs(clone:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanCollide = false
-        end
-    end
-
     table.insert(cloneList, clone)
-    statusLabel.Text = "Clone spawned! Total: " .. #cloneList
+    if statusLabel then statusLabel.Text = "Clone dibuat, total: " .. #cloneList end
 end
 
 local function removeAllClones()
@@ -133,7 +173,7 @@ local function removeAllClones()
         end
     end
     cloneList = {}
-    statusLabel.Text = "Semua clone dihapus"
+    if statusLabel then statusLabel.Text = "Semua clone dihapus" end
 end
 
 -- ===== LOOP FOLLOW =====
@@ -148,8 +188,16 @@ RunService.Heartbeat:Connect(function()
     updateTarget()
     if not isAlive(targetRoot) or not isAlive(targetHum) then return end
 
-    local look = targetRoot.CFrame.LookVector
-    local desiredPos = targetRoot.Position - (look * followDistance)
+    local desiredPos
+    if followMode == "keep" then
+        -- Jaga jarak 100 stud di belakang target
+        local look = targetRoot.CFrame.LookVector
+        desiredPos = targetRoot.Position - look * followDistance
+    else
+        -- Mode dekat: langsung ke posisi target
+        desiredPos = targetRoot.Position
+    end
+
     hum:MoveTo(desiredPos)
 
     if hum.WalkSpeed ~= SUPER_SPEED then
@@ -161,15 +209,13 @@ RunService.Heartbeat:Connect(function()
     local yDiff = targetRoot.Position.Y - root.Position.Y
     local shouldJump = targetJumping or distTotal > 15 or yDiff > 5
 
-    if shouldJump then
-        if hum.FloorMaterial ~= Enum.Material.Air and hum:GetState() ~= Enum.HumanoidStateType.Jumping then
-            hum.Jump = true
-        end
+    if shouldJump and hum.FloorMaterial ~= Enum.Material.Air and hum:GetState() ~= Enum.HumanoidStateType.Jumping then
+        hum.Jump = true
     end
 end)
 
 -- ============================================================
--- 🖥️ UI CERAH + DAFTAR TARGET + SPAM CLONE
+-- UI CLEAN - TANPA EMOJI
 -- ============================================================
 local gui = Instance.new("ScreenGui")
 gui.ResetOnSpawn = false
@@ -177,33 +223,33 @@ gui.Name = "AutoFollowPro"
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 320, 0, 330)  -- lebih tinggi
-mainFrame.Position = UDim2.new(0.5, -160, 0.5, -165)
-mainFrame.BackgroundColor3 = Color3.fromRGB(240, 240, 245)
+mainFrame.Size = UDim2.new(0, 320, 0, 350)
+mainFrame.Position = UDim2.new(0.5, -160, 0.5, -175)
+mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
 mainFrame.BorderSizePixel = 0
 mainFrame.ClipsDescendants = true
 mainFrame.Parent = gui
 
 local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 6)
+corner.CornerRadius = UDim.new(0, 8)
 corner.Parent = mainFrame
 
 -- Title bar
 local titleBar = Instance.new("Frame")
 titleBar.Size = UDim2.new(1, 0, 0, 32)
-titleBar.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
+titleBar.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
 titleBar.BorderSizePixel = 0
 titleBar.Parent = mainFrame
 
 local titleCorner = Instance.new("UICorner")
-titleCorner.CornerRadius = UDim.new(0, 6)
+titleCorner.CornerRadius = UDim.new(0, 8)
 titleCorner.Parent = titleBar
 
 local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -60, 1, 0)
 titleLabel.Position = UDim2.new(0, 12, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "🎯 AUTO FOLLOW"
+titleLabel.Text = "AUTO FOLLOW"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.Font = Enum.Font.SourceSansBold
 titleLabel.TextSize = 16
@@ -214,9 +260,9 @@ titleLabel.Parent = titleBar
 local closeBtn = Instance.new("TextButton")
 closeBtn.Size = UDim2.new(0, 28, 0, 28)
 closeBtn.Position = UDim2.new(1, -32, 0, 2)
-closeBtn.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
+closeBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
 closeBtn.BorderSizePixel = 0
-closeBtn.Text = "✕"
+closeBtn.Text = "X"
 closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 closeBtn.Font = Enum.Font.SourceSansBold
 closeBtn.TextSize = 16
@@ -229,9 +275,9 @@ closeCorner.Parent = closeBtn
 local minBtn = Instance.new("TextButton")
 minBtn.Size = UDim2.new(0, 28, 0, 28)
 minBtn.Position = UDim2.new(1, -62, 0, 2)
-minBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 120)
+minBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
 minBtn.BorderSizePixel = 0
-minBtn.Text = "─"
+minBtn.Text = "-"
 minBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 minBtn.Font = Enum.Font.SourceSansBold
 minBtn.TextSize = 20
@@ -247,53 +293,53 @@ content.Position = UDim2.new(0, 10, 0, 38)
 content.BackgroundTransparency = 1
 content.Parent = mainFrame
 
--- FOLLOW 100
-local btnFollow100 = Instance.new("TextButton")
-btnFollow100.Size = UDim2.new(0.46, -5, 0, 32)
-btnFollow100.Position = UDim2.new(0, 0, 0, 0)
-btnFollow100.Text = "FOLLOW 100"
-btnFollow100.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnFollow100.BackgroundColor3 = Color3.fromRGB(60, 160, 80)
-btnFollow100.BorderSizePixel = 0
-btnFollow100.Font = Enum.Font.SourceSansBold
-btnFollow100.TextSize = 14
-btnFollow100.Parent = content
+-- Tombol Jaga Jarak
+local btnKeepDistance = Instance.new("TextButton")
+btnKeepDistance.Size = UDim2.new(0.48, 0, 0, 30)
+btnKeepDistance.Position = UDim2.new(0, 0, 0, 0)
+btnKeepDistance.Text = "Jaga Jarak"
+btnKeepDistance.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnKeepDistance.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+btnKeepDistance.BorderSizePixel = 0
+btnKeepDistance.Font = Enum.Font.SourceSansBold
+btnKeepDistance.TextSize = 13
+btnKeepDistance.Parent = content
 local corner1 = Instance.new("UICorner")
 corner1.CornerRadius = UDim.new(0, 4)
-corner1.Parent = btnFollow100
+corner1.Parent = btnKeepDistance
 
--- FOLLOW 1000
-local btnFollow1000 = Instance.new("TextButton")
-btnFollow1000.Size = UDim2.new(0.46, -5, 0, 32)
-btnFollow1000.Position = UDim2.new(0.54, 0, 0, 0)
-btnFollow1000.Text = "FOLLOW 1000"
-btnFollow1000.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnFollow1000.BackgroundColor3 = Color3.fromRGB(60, 120, 200)
-btnFollow1000.BorderSizePixel = 0
-btnFollow1000.Font = Enum.Font.SourceSansBold
-btnFollow1000.TextSize = 14
-btnFollow1000.Parent = content
+-- Tombol Dekati
+local btnClose = Instance.new("TextButton")
+btnClose.Size = UDim2.new(0.48, 0, 0, 30)
+btnClose.Position = UDim2.new(0.52, 0, 0, 0)
+btnClose.Text = "Dekati"
+btnClose.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnClose.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+btnClose.BorderSizePixel = 0
+btnClose.Font = Enum.Font.SourceSansBold
+btnClose.TextSize = 13
+btnClose.Parent = content
 local corner2 = Instance.new("UICorner")
 corner2.CornerRadius = UDim.new(0, 4)
-corner2.Parent = btnFollow1000
+corner2.Parent = btnClose
 
 -- Status follow
 local followStatus = Instance.new("TextLabel")
 followStatus.Size = UDim2.new(1, 0, 0, 18)
-followStatus.Position = UDim2.new(0, 0, 0, 36)
+followStatus.Position = UDim2.new(0, 0, 0, 34)
 followStatus.BackgroundTransparency = 1
 followStatus.Text = "Follow: OFF"
-followStatus.TextColor3 = Color3.fromRGB(50, 50, 50)
+followStatus.TextColor3 = Color3.fromRGB(200, 200, 200)
 followStatus.Font = Enum.Font.SourceSans
 followStatus.TextSize = 13
 followStatus.TextXAlignment = Enum.TextXAlignment.Left
 followStatus.Parent = content
 
--- DAFTAR TARGET
+-- Frame daftar target
 local targetListFrame = Instance.new("ScrollingFrame")
 targetListFrame.Size = UDim2.new(1, 0, 0, 100)
 targetListFrame.Position = UDim2.new(0, 0, 0, 58)
-targetListFrame.BackgroundColor3 = Color3.fromRGB(220, 220, 230)
+targetListFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 targetListFrame.BorderSizePixel = 0
 targetListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 targetListFrame.ScrollBarThickness = 6
@@ -302,62 +348,58 @@ local listCorner = Instance.new("UICorner")
 listCorner.CornerRadius = UDim.new(0, 4)
 listCorner.Parent = targetListFrame
 
-local targetListLayout = Instance.new("UIListLayout")
-targetListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-targetListLayout.Padding = UDim.new(0, 2)
-targetListLayout.Parent = targetListFrame
-
--- SPAM CLONE
+-- Tombol Spawn Clone
 local btnSpawnClone = Instance.new("TextButton")
-btnSpawnClone.Size = UDim2.new(0.46, -5, 0, 30)
+btnSpawnClone.Size = UDim2.new(0.48, 0, 0, 30)
 btnSpawnClone.Position = UDim2.new(0, 0, 0, 165)
-btnSpawnClone.Text = "SPAWN CLONE"
+btnSpawnClone.Text = "Spawn Clone"
 btnSpawnClone.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnSpawnClone.BackgroundColor3 = Color3.fromRGB(180, 100, 180)
+btnSpawnClone.BackgroundColor3 = Color3.fromRGB(120, 80, 140)
 btnSpawnClone.BorderSizePixel = 0
 btnSpawnClone.Font = Enum.Font.SourceSansBold
-btnSpawnClone.TextSize = 14
+btnSpawnClone.TextSize = 13
 btnSpawnClone.Parent = content
 local corner3 = Instance.new("UICorner")
 corner3.CornerRadius = UDim.new(0, 4)
 corner3.Parent = btnSpawnClone
 
+-- Tombol Hapus Semua Clone
 local btnRemoveAllClone = Instance.new("TextButton")
-btnRemoveAllClone.Size = UDim2.new(0.46, -5, 0, 30)
-btnRemoveAllClone.Position = UDim2.new(0.54, 0, 0, 165)
-btnRemoveAllClone.Text = "HAPUS SEMUA"
+btnRemoveAllClone.Size = UDim2.new(0.48, 0, 0, 30)
+btnRemoveAllClone.Position = UDim2.new(0.52, 0, 0, 165)
+btnRemoveAllClone.Text = "Hapus Semua"
 btnRemoveAllClone.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnRemoveAllClone.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
+btnRemoveAllClone.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
 btnRemoveAllClone.BorderSizePixel = 0
 btnRemoveAllClone.Font = Enum.Font.SourceSansBold
-btnRemoveAllClone.TextSize = 14
+btnRemoveAllClone.TextSize = 13
 btnRemoveAllClone.Parent = content
 local corner4 = Instance.new("UICorner")
 corner4.CornerRadius = UDim.new(0, 4)
 corner4.Parent = btnRemoveAllClone
 
--- NO CLIP
+-- Tombol No Clip
 local btnNoClip = Instance.new("TextButton")
-btnNoClip.Size = UDim2.new(0.46, -5, 0, 30)
+btnNoClip.Size = UDim2.new(0.48, 0, 0, 30)
 btnNoClip.Position = UDim2.new(0, 0, 0, 200)
-btnNoClip.Text = "NO CLIP: OFF"
+btnNoClip.Text = "No Clip: OFF"
 btnNoClip.TextColor3 = Color3.fromRGB(255, 255, 255)
-btnNoClip.BackgroundColor3 = Color3.fromRGB(200, 120, 50)
+btnNoClip.BackgroundColor3 = Color3.fromRGB(150, 100, 60)
 btnNoClip.BorderSizePixel = 0
 btnNoClip.Font = Enum.Font.SourceSansBold
-btnNoClip.TextSize = 14
+btnNoClip.TextSize = 13
 btnNoClip.Parent = content
 local corner5 = Instance.new("UICorner")
 corner5.CornerRadius = UDim.new(0, 4)
 corner5.Parent = btnNoClip
 
--- Status label
-local statusLabel = Instance.new("TextLabel")
+-- Status label (di-assign ke variabel forward)
+statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, 0, 0, 18)
 statusLabel.Position = UDim2.new(0, 0, 0, 235)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Text = "Pilih target dari daftar"
-statusLabel.TextColor3 = Color3.fromRGB(60, 60, 60)
+statusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
 statusLabel.Font = Enum.Font.SourceSans
 statusLabel.TextSize = 12
 statusLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -365,6 +407,7 @@ statusLabel.Parent = content
 
 -- ===== FUNGSI UPDATE DAFTAR TARGET =====
 local function updateTargetList()
+    -- Hapus tombol lama
     for _, child in ipairs(targetListFrame:GetChildren()) do
         if child:IsA("TextButton") then
             child:Destroy()
@@ -372,19 +415,19 @@ local function updateTargetList()
     end
 
     local plrs = Players:GetPlayers()
-    local listHeight = 0
+    local y = 0
     for _, plr in ipairs(plrs) do
         if plr ~= player then
             local btn = Instance.new("TextButton")
             btn.Size = UDim2.new(1, -10, 0, 24)
-            btn.Position = UDim2.new(0, 5, 0, listHeight)
+            btn.Position = UDim2.new(0, 5, 0, y)
             btn.Text = plr.Name
-            btn.TextColor3 = Color3.fromRGB(30, 30, 30)
-            btn.BackgroundColor3 = Color3.fromRGB(240, 240, 250)
+            btn.TextColor3 = Color3.fromRGB(220, 220, 220)
+            btn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
             btn.BorderSizePixel = 1
-            btn.BorderColor3 = Color3.fromRGB(180, 180, 190)
+            btn.BorderColor3 = Color3.fromRGB(80, 80, 90)
             btn.Font = Enum.Font.SourceSans
-            btn.TextSize = 14
+            btn.TextSize = 13
             btn.Parent = targetListFrame
 
             local btnCorner = Instance.new("UICorner")
@@ -394,25 +437,72 @@ local function updateTargetList()
             btn.MouseButton1Click:Connect(function()
                 targetPlayer = plr.Name
                 updateTarget()
-                statusLabel.Text = "Target: " .. targetPlayer
+                if statusLabel then statusLabel.Text = "Target: " .. targetPlayer end
                 for _, b in ipairs(targetListFrame:GetChildren()) do
                     if b:IsA("TextButton") then
-                        b.BackgroundColor3 = (b == btn) and Color3.fromRGB(150, 200, 255) or Color3.fromRGB(240, 240, 250)
+                        b.BackgroundColor3 = (b == btn) and Color3.fromRGB(70, 130, 200) or Color3.fromRGB(45, 45, 50)
                     end
                 end
             end)
 
-            listHeight = listHeight + 26
+            y = y + 26
         end
     end
-    targetListFrame.CanvasSize = UDim2.new(0, 0, 0, listHeight)
+
+    targetListFrame.CanvasSize = UDim2.new(0, 0, 0, y)
 end
 
 updateTargetList()
 Players.PlayerAdded:Connect(updateTargetList)
 Players.PlayerRemoving:Connect(updateTargetList)
 
--- ===== DRAG =====
+-- ===== FUNGSI UPDATE TOMBOL FOLLOW =====
+local function updateFollowButtons()
+    local keepActive = followOn and followMode == "keep"
+    local closeActive = followOn and followMode == "close"
+
+    btnKeepDistance.Text = keepActive and "Jaga Jarak: ON" or "Jaga Jarak"
+    btnKeepDistance.BackgroundColor3 = keepActive and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 70)
+
+    btnClose.Text = closeActive and "Dekati: ON" or "Dekati"
+    btnClose.BackgroundColor3 = closeActive and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 70)
+
+    if followOn then
+        followStatus.Text = "Follow: ON (" .. (followMode == "keep" and "jaga jarak" or "dekat") .. ")"
+    else
+        followStatus.Text = "Follow: OFF"
+    end
+end
+
+local function setFollow(mode)
+    if not targetPlayer then
+        if statusLabel then statusLabel.Text = "Pilih target dulu" end
+        return
+    end
+
+    if followOn and followMode == mode then
+        -- Matikan follow jika tombol yang sama ditekan lagi
+        followOn = false
+        updateFollowButtons()
+        if statusLabel then statusLabel.Text = "Follow dimatikan" end
+        return
+    end
+
+    followOn = true
+    followMode = mode
+    if mode == "keep" then
+        followDistance = 100
+    else
+        followDistance = 0 -- tidak dipakai, mode dekat langsung ke target
+    end
+
+    updateFollowButtons()
+    if statusLabel then
+        statusLabel.Text = "Mengikuti " .. targetPlayer .. " (" .. (mode == "keep" and "jaga jarak" or "dekat") .. ")"
+    end
+end
+
+-- ===== DRAG UI =====
 local dragActive = false
 local dragStart, frameStart
 
@@ -454,12 +544,12 @@ local function toggleMinimize()
             miniFrame = Instance.new("TextButton")
             miniFrame.Size = UDim2.new(0, 40, 0, 40)
             miniFrame.Position = UDim2.new(1, -50, 1, -50)
-            miniFrame.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
+            miniFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
             miniFrame.BorderSizePixel = 0
-            miniFrame.Text = "🎯"
+            miniFrame.Text = "AF"
             miniFrame.TextColor3 = Color3.fromRGB(255, 255, 255)
             miniFrame.Font = Enum.Font.SourceSansBold
-            miniFrame.TextSize = 20
+            miniFrame.TextSize = 14
             miniFrame.Parent = gui
             local miniCorner = Instance.new("UICorner")
             miniCorner.CornerRadius = UDim.new(0, 10)
@@ -476,66 +566,24 @@ end
 
 minBtn.MouseButton1Click:Connect(toggleMinimize)
 
--- ===== CLOSE =====
-closeBtn.MouseButton1Click:Connect(function()
-    gui:Destroy()
-    removeAllClones()
-end)
-
 -- ===== EVENT TOMBOL =====
 
-btnFollow100.MouseButton1Click:Connect(function()
-    if not targetPlayer then
-        statusLabel.Text = "Pilih target dulu!"
-        return
-    end
-    followOn = not followOn
-    followDistance = 100
-    if followOn then
-        btnFollow100.BackgroundColor3 = Color3.fromRGB(40, 200, 60)
-        btnFollow100.Text = "FOLLOW 100 ON"
-        btnFollow1000.BackgroundColor3 = Color3.fromRGB(60, 120, 200)
-        btnFollow1000.Text = "FOLLOW 1000"
-        followStatus.Text = "Follow: ON (100)"
-        statusLabel.Text = "Mengikuti " .. targetPlayer .. " (jarak 100)"
-    else
-        btnFollow100.BackgroundColor3 = Color3.fromRGB(60, 160, 80)
-        btnFollow100.Text = "FOLLOW 100"
-        followStatus.Text = "Follow: OFF"
-        statusLabel.Text = "Follow dimatikan"
-    end
+btnKeepDistance.MouseButton1Click:Connect(function()
+    setFollow("keep")
 end)
 
-btnFollow1000.MouseButton1Click:Connect(function()
-    if not targetPlayer then
-        statusLabel.Text = "Pilih target dulu!"
-        return
-    end
-    followOn = not followOn
-    followDistance = 1000
-    if followOn then
-        btnFollow1000.BackgroundColor3 = Color3.fromRGB(40, 180, 255)
-        btnFollow1000.Text = "FOLLOW 1000 ON"
-        btnFollow100.BackgroundColor3 = Color3.fromRGB(60, 160, 80)
-        btnFollow100.Text = "FOLLOW 100"
-        followStatus.Text = "Follow: ON (1000)"
-        statusLabel.Text = "Mengikuti " .. targetPlayer .. " (jarak 1000)"
-    else
-        btnFollow1000.BackgroundColor3 = Color3.fromRGB(60, 120, 200)
-        btnFollow1000.Text = "FOLLOW 1000"
-        followStatus.Text = "Follow: OFF"
-        statusLabel.Text = "Follow dimatikan"
-    end
+btnClose.MouseButton1Click:Connect(function()
+    setFollow("close")
 end)
 
 btnSpawnClone.MouseButton1Click:Connect(function()
     if not targetPlayer then
-        statusLabel.Text = "Pilih target dulu!"
+        if statusLabel then statusLabel.Text = "Pilih target dulu" end
         return
     end
     updateTarget()
     if not targetRoot then
-        statusLabel.Text = "Target tidak valid"
+        if statusLabel then statusLabel.Text = "Target tidak valid" end
         return
     end
     spawnClone()
@@ -547,22 +595,23 @@ end)
 
 btnNoClip.MouseButton1Click:Connect(function()
     local state = toggleNoClip()
-    btnNoClip.Text = state and "NO CLIP: ON" or "NO CLIP: OFF"
-    btnNoClip.BackgroundColor3 = state and Color3.fromRGB(50, 200, 100) or Color3.fromRGB(200, 120, 50)
-    statusLabel.Text = state and "No Clip aktif" or "No Clip nonaktif"
+    btnNoClip.Text = state and "No Clip: ON" or "No Clip: OFF"
+    btnNoClip.BackgroundColor3 = state and Color3.fromRGB(50, 180, 90) or Color3.fromRGB(150, 100, 60)
+    if statusLabel then statusLabel.Text = state and "No Clip aktif" or "No Clip nonaktif" end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+    removeAllClones()
+    gui:Destroy()
 end)
 
 -- ===== CEK TARGET KELUAR =====
 RunService.Heartbeat:Connect(function()
     if followOn and not targetPlayer then
         followOn = false
-        followStatus.Text = "Follow: OFF"
-        btnFollow100.Text = "FOLLOW 100"
-        btnFollow100.BackgroundColor3 = Color3.fromRGB(60, 160, 80)
-        btnFollow1000.Text = "FOLLOW 1000"
-        btnFollow1000.BackgroundColor3 = Color3.fromRGB(60, 120, 200)
-        statusLabel.Text = "Target keluar game, follow dimatikan"
+        updateFollowButtons()
+        if statusLabel then statusLabel.Text = "Target keluar, follow dimatikan" end
     end
 end)
 
-print("✅ Auto Follow Pro v6 siap! Spam clone sebanyak-banyaknya!")
+print("Auto Follow Pro v7 siap. Tanpa emoji, tanpa bug.")
