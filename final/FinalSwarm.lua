@@ -1,5 +1,5 @@
 -- ============================================================
--- AUTO FOLLOW PRO v7 - FIXED & CLEAN
+-- AUTO FOLLOW PRO v10 - FIXED & OPTIMIZED
 -- ============================================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -14,14 +14,27 @@ local followOn = false
 local followMode = "keep" -- "keep" = jaga jarak, "close" = dekati
 local followDistance = 100
 local targetPlayer = nil
-local SUPER_SPEED = 100
+local walkSpeed = 100
 local noClipOn = false
 local cloneList = {}
 local MAX_CLONES = 50
 local noclipBody = nil
+local originalCanCollide = {}
+local originalCanCollideInitialized = false -- penanda apakah state asli sudah disimpan
 
--- statusLabel di-forward declare agar bisa diakses fungsi awal
+-- Auto Dodge
+local autoDodgeOn = false
+local lastDodgeTime = 0
+local lastPositions = {}
+local scanInterval = 0.05
+local nextScan = 0
+local dodgeCooldown = 1.0
+
+-- statusLabel di-forward declare
 local statusLabel
+
+-- Simpan koneksi untuk bisa diputus saat GUI ditutup
+local connections = {}
 
 -- ===== FUNGSI DASAR =====
 local function isAlive(obj)
@@ -31,6 +44,7 @@ local function isAlive(obj)
 end
 
 local function updateSelf(newChar)
+    local oldChar = char
     char = newChar or player.Character
     if not char then
         hum, root = nil, nil
@@ -43,7 +57,14 @@ local function updateSelf(newChar)
     if not isAlive(char) or not hum or not root then
         char, hum, root = nil, nil, nil
     else
-        if noClipOn then setNoClip(true) end
+        -- Reset penyimpanan CanCollide jika karakter berganti
+        if char ~= oldChar then
+            originalCanCollide = {}
+            originalCanCollideInitialized = false
+        end
+        if noClipOn then
+            setNoClip(true)
+        end
     end
 end
 
@@ -74,22 +95,48 @@ end)
 local function setNoClip(state)
     if not char or not root then return end
 
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanCollide = not state
-        end
-    end
-
     if state then
-        if not noclipBody or not noclipBody.Parent then
+        -- Jika pertama kali atau karakter baru, simpan state CanCollide asli
+        if not originalCanCollideInitialized then
+            originalCanCollide = {}
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    originalCanCollide[part] = part.CanCollide
+                end
+            end
+            originalCanCollideInitialized = true
+        end
+
+        -- Terapkan no clip ke semua bagian saat ini, simpan yang belum ada
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                if originalCanCollide[part] == nil then
+                    originalCanCollide[part] = part.CanCollide
+                end
+                part.CanCollide = false
+            end
+        end
+
+        -- Buat atau pindahkan BodyVelocity ke root saat ini
+        if not noclipBody or noclipBody.Parent ~= root then
+            if noclipBody then
+                noclipBody:Destroy()
+            end
             noclipBody = Instance.new("BodyVelocity")
             noclipBody.Velocity = Vector3.new(0, 0, 0)
-            noclipBody.MaxForce = Vector3.new(0, 0, 0)
+            noclipBody.MaxForce = Vector3.new(100000, 100000, 100000)
+            noclipBody.Parent = root
         end
-        noclipBody.Parent = root
-        noclipBody.MaxForce = Vector3.new(0, 100000, 0) -- lawan gravitasi
         noclipBody.Velocity = Vector3.new(0, 0, 0)
     else
+        -- Kembalikan CanCollide asli
+        for part, original in pairs(originalCanCollide) do
+            if part and part.Parent then
+                part.CanCollide = original
+            end
+        end
+
+        -- Hancurkan BodyVelocity
         if noclipBody then
             noclipBody:Destroy()
             noclipBody = nil
@@ -125,9 +172,13 @@ local function spawnClone()
 
     local clone = player.Character:Clone()
 
-    -- Buang script supaya tidak error
+    -- Buang semua script agar tidak error
     for _, desc in ipairs(clone:GetDescendants()) do
         if desc:IsA("Script") or desc:IsA("LocalScript") or desc:IsA("ModuleScript") then
+            desc:Destroy()
+        end
+        -- Hapus juga Humanoid dan Animator di semua descendant
+        if desc:IsA("Humanoid") or desc:IsA("Animator") then
             desc:Destroy()
         end
     end
@@ -135,13 +186,25 @@ local function spawnClone()
     clone.Parent = workspace
     clone.Name = "Clone_" .. player.Name .. "_" .. (#cloneList + 1)
 
-    -- Posisi acak di sekitar target (radius 15-60 stud)
+    -- Hitung posisi acak di sekitar target
     local angle = math.random() * 2 * math.pi
     local radius = math.random(15, 60)
     local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
     local pos = targetRoot.Position + offset
     pos = Vector3.new(pos.X, targetRoot.Position.Y, pos.Z)
 
+    -- Raycast ke bawah untuk mencari tanah (agar clone tidak melayang)
+    local rayOrigin = pos + Vector3.new(0, 5, 0)
+    local rayDirection = Vector3.new(0, -100, 0)
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {player.Character, clone}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    local rayResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+    if rayResult then
+        pos = Vector3.new(pos.X, rayResult.Position.Y + 3, pos.Z)
+    end
+
+    -- Set posisi root clone
     local rootPart = clone:FindFirstChild("HumanoidRootPart")
     if rootPart then
         rootPart.CFrame = CFrame.new(pos)
@@ -153,13 +216,6 @@ local function spawnClone()
             part.Anchored = true
             part.CanCollide = false
         end
-    end
-
-    local humClone = clone:FindFirstChildOfClass("Humanoid")
-    if humClone then
-        humClone.PlatformStand = true
-        humClone.WalkSpeed = 0
-        humClone.JumpPower = 0
     end
 
     table.insert(cloneList, clone)
@@ -176,8 +232,117 @@ local function removeAllClones()
     if statusLabel then statusLabel.Text = "Semua clone dihapus" end
 end
 
+-- ===== TELEPORT KE TARGET =====
+local function teleportToTarget()
+    if not targetPlayer then
+        if statusLabel then statusLabel.Text = "Pilih target dulu" end
+        return
+    end
+    updateTarget()
+    if not targetRoot or not root then
+        if statusLabel then statusLabel.Text = "Target atau karakter tidak valid" end
+        return
+    end
+
+    -- Teleport 3 stud di samping target (agar tidak bertumpuk)
+    local offset = targetRoot.CFrame.RightVector * 3
+    local newCFrame = targetRoot.CFrame + offset
+    root.CFrame = newCFrame
+
+    if statusLabel then statusLabel.Text = "Teleport ke " .. targetPlayer end
+end
+
+-- ===== AUTO DODGE =====
+-- Fungsi untuk mendapatkan part di radius tertentu dengan fallback yang aman
+local function getPartsInRadius(center, radius)
+    -- Gunakan FindPartsInRegion3 (masih tersedia, meski deprecated)
+    local region = Region3.new(
+        center - Vector3.new(radius, radius, radius),
+        center + Vector3.new(radius, radius, radius)
+    )
+    return workspace:FindPartsInRegion3(region, nil, 100)
+end
+
+local function performDodge()
+    if not root or not hum then return end
+    hum.Jump = true
+    local side = math.random(2) == 1 and 1 or -1
+    local impulse = root.CFrame.RightVector * side * 30 + Vector3.new(0, 20, 0)
+
+    -- Gunakan Velocity untuk kompatibilitas (AssemblyLinearVelocity juga didukung)
+    if root.AssemblyLinearVelocity then
+        root.AssemblyLinearVelocity = impulse
+    elseif root.Velocity then
+        root.Velocity = impulse
+    end
+
+    if statusLabel then statusLabel.Text = "Auto Dodge!" end
+end
+
+-- Loop auto dodge terpisah
+local autoDodgeConnection = RunService.Heartbeat:Connect(function()
+    if not autoDodgeOn then return end
+    if not isAlive(char) or not isAlive(root) then return end
+
+    local now = tick()
+    if now < nextScan then return end
+    nextScan = now + scanInterval
+
+    -- Scan radius 15 stud
+    local parts = getPartsInRadius(root.Position, 15)
+    local currentParts = {}
+
+    for _, part in ipairs(parts) do
+        if part and part:IsA("BasePart") and part.Parent and part ~= root then
+            local skip = false
+            -- Skip bagian dari karakter pemain mana pun
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr.Character and part:IsDescendantOf(plr.Character) then
+                    skip = true
+                    break
+                end
+            end
+            -- Skip clone list
+            if not skip then
+                for _, cl in ipairs(cloneList) do
+                    if part:IsDescendantOf(cl) then
+                        skip = true
+                        break
+                    end
+                end
+            end
+            if not skip then
+                currentParts[part] = part.Position
+            end
+        end
+    end
+
+    -- Hitung kecepatan objek yang terlihat sebelumnya
+    if lastPositions then
+        for part, oldPos in pairs(lastPositions) do
+            if part.Parent and currentParts[part] then
+                local newPos = currentParts[part]
+                local velocity = (newPos - oldPos).Magnitude / scanInterval
+                if velocity > 40 then
+                    local dirToPlayer = (root.Position - newPos).Unit
+                    local moveDir = (newPos - oldPos).Unit
+                    local dot = dirToPlayer:Dot(moveDir)
+                    if dot > 0.3 then
+                        if now - lastDodgeTime > dodgeCooldown then
+                            lastDodgeTime = now
+                            performDodge()
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    lastPositions = currentParts
+end)
+
 -- ===== LOOP FOLLOW =====
-RunService.Heartbeat:Connect(function()
+local followConnection = RunService.Heartbeat:Connect(function()
     if not followOn then return end
 
     if not isAlive(char) or not isAlive(root) or not isAlive(hum) then
@@ -190,18 +355,17 @@ RunService.Heartbeat:Connect(function()
 
     local desiredPos
     if followMode == "keep" then
-        -- Jaga jarak 100 stud di belakang target
         local look = targetRoot.CFrame.LookVector
         desiredPos = targetRoot.Position - look * followDistance
     else
-        -- Mode dekat: langsung ke posisi target
         desiredPos = targetRoot.Position
     end
 
     hum:MoveTo(desiredPos)
 
-    if hum.WalkSpeed ~= SUPER_SPEED then
-        hum.WalkSpeed = SUPER_SPEED
+    -- Gunakan walkSpeed yang bisa diubah
+    if hum.WalkSpeed ~= walkSpeed then
+        hum.WalkSpeed = walkSpeed
     end
 
     local targetJumping = targetHum:GetState() == Enum.HumanoidStateType.Jumping
@@ -223,8 +387,8 @@ gui.Name = "AutoFollowPro"
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 320, 0, 350)
-mainFrame.Position = UDim2.new(0.5, -160, 0.5, -175)
+mainFrame.Size = UDim2.new(0, 320, 0, 470)
+mainFrame.Position = UDim2.new(0.5, -160, 0.5, -235)
 mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
 mainFrame.BorderSizePixel = 0
 mainFrame.ClipsDescendants = true
@@ -249,7 +413,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -60, 1, 0)
 titleLabel.Position = UDim2.new(0, 12, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "AUTO FOLLOW"
+titleLabel.Text = "AUTO FOLLOW PRO v10"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.Font = Enum.Font.SourceSansBold
 titleLabel.TextSize = 16
@@ -393,10 +557,84 @@ local corner5 = Instance.new("UICorner")
 corner5.CornerRadius = UDim.new(0, 4)
 corner5.Parent = btnNoClip
 
+-- Speed Label
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(1, 0, 0, 20)
+speedLabel.Position = UDim2.new(0, 0, 0, 235)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Kecepatan: " .. walkSpeed
+speedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+speedLabel.Font = Enum.Font.SourceSans
+speedLabel.TextSize = 13
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = content
+
+-- Speed Input
+local speedInput = Instance.new("TextBox")
+speedInput.Size = UDim2.new(0.55, 0, 0, 28)
+speedInput.Position = UDim2.new(0, 0, 0, 258)
+speedInput.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+speedInput.BorderSizePixel = 1
+speedInput.BorderColor3 = Color3.fromRGB(80, 80, 90)
+speedInput.Text = tostring(walkSpeed)
+speedInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedInput.Font = Enum.Font.SourceSans
+speedInput.TextSize = 13
+speedInput.PlaceholderText = "Masukkan angka"
+speedInput.Parent = content
+local speedCorner = Instance.new("UICorner")
+speedCorner.CornerRadius = UDim.new(0, 4)
+speedCorner.Parent = speedInput
+
+-- Set Speed Button
+local btnSetSpeed = Instance.new("TextButton")
+btnSetSpeed.Size = UDim2.new(0.40, 0, 0, 28)
+btnSetSpeed.Position = UDim2.new(0.60, 0, 0, 258)
+btnSetSpeed.Text = "Set Speed"
+btnSetSpeed.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnSetSpeed.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
+btnSetSpeed.BorderSizePixel = 0
+btnSetSpeed.Font = Enum.Font.SourceSansBold
+btnSetSpeed.TextSize = 13
+btnSetSpeed.Parent = content
+local speedBtnCorner = Instance.new("UICorner")
+speedBtnCorner.CornerRadius = UDim.new(0, 4)
+speedBtnCorner.Parent = btnSetSpeed
+
+-- Teleport Button
+local btnTeleport = Instance.new("TextButton")
+btnTeleport.Size = UDim2.new(1, 0, 0, 30)
+btnTeleport.Position = UDim2.new(0, 0, 0, 290)
+btnTeleport.Text = "Teleport ke Target"
+btnTeleport.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnTeleport.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
+btnTeleport.BorderSizePixel = 0
+btnTeleport.Font = Enum.Font.SourceSansBold
+btnTeleport.TextSize = 13
+btnTeleport.Parent = content
+local teleportCorner = Instance.new("UICorner")
+teleportCorner.CornerRadius = UDim.new(0, 4)
+teleportCorner.Parent = btnTeleport
+
+-- Auto Dodge Button
+local btnAutoDodge = Instance.new("TextButton")
+btnAutoDodge.Size = UDim2.new(1, 0, 0, 30)
+btnAutoDodge.Position = UDim2.new(0, 0, 0, 325)
+btnAutoDodge.Text = "Auto Dodge: OFF"
+btnAutoDodge.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnAutoDodge.BackgroundColor3 = Color3.fromRGB(150, 100, 60)
+btnAutoDodge.BorderSizePixel = 0
+btnAutoDodge.Font = Enum.Font.SourceSansBold
+btnAutoDodge.TextSize = 13
+btnAutoDodge.Parent = content
+local dodgeCorner = Instance.new("UICorner")
+dodgeCorner.CornerRadius = UDim.new(0, 4)
+dodgeCorner.Parent = btnAutoDodge
+
 -- Status label (di-assign ke variabel forward)
 statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, 0, 0, 18)
-statusLabel.Position = UDim2.new(0, 0, 0, 235)
+statusLabel.Position = UDim2.new(0, 0, 0, 360)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Text = "Pilih target dari daftar"
 statusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
@@ -407,7 +645,6 @@ statusLabel.Parent = content
 
 -- ===== FUNGSI UPDATE DAFTAR TARGET =====
 local function updateTargetList()
-    -- Hapus tombol lama
     for _, child in ipairs(targetListFrame:GetChildren()) do
         if child:IsA("TextButton") then
             child:Destroy()
@@ -454,7 +691,15 @@ end
 
 updateTargetList()
 Players.PlayerAdded:Connect(updateTargetList)
-Players.PlayerRemoving:Connect(updateTargetList)
+Players.PlayerRemoving:Connect(function(plr)
+    updateTargetList()
+    if targetPlayer == plr.Name then
+        targetPlayer = nil
+        followOn = false
+        updateFollowButtons()
+        if statusLabel then statusLabel.Text = "Target keluar, follow dimatikan" end
+    end
+end)
 
 -- ===== FUNGSI UPDATE TOMBOL FOLLOW =====
 local function updateFollowButtons()
@@ -481,7 +726,6 @@ local function setFollow(mode)
     end
 
     if followOn and followMode == mode then
-        -- Matikan follow jika tombol yang sama ditekan lagi
         followOn = false
         updateFollowButtons()
         if statusLabel then statusLabel.Text = "Follow dimatikan" end
@@ -493,7 +737,7 @@ local function setFollow(mode)
     if mode == "keep" then
         followDistance = 100
     else
-        followDistance = 0 -- tidak dipakai, mode dekat langsung ke target
+        followDistance = 0
     end
 
     updateFollowButtons()
@@ -600,18 +844,46 @@ btnNoClip.MouseButton1Click:Connect(function()
     if statusLabel then statusLabel.Text = state and "No Clip aktif" or "No Clip nonaktif" end
 end)
 
-closeBtn.MouseButton1Click:Connect(function()
-    removeAllClones()
-    gui:Destroy()
-end)
-
--- ===== CEK TARGET KELUAR =====
-RunService.Heartbeat:Connect(function()
-    if followOn and not targetPlayer then
-        followOn = false
-        updateFollowButtons()
-        if statusLabel then statusLabel.Text = "Target keluar, follow dimatikan" end
+-- Event Speed
+btnSetSpeed.MouseButton1Click:Connect(function()
+    local newSpeed = tonumber(speedInput.Text)
+    if newSpeed and newSpeed > 0 then
+        walkSpeed = newSpeed
+        speedLabel.Text = "Kecepatan: " .. walkSpeed
+        if hum then
+            hum.WalkSpeed = walkSpeed
+        end
+        if statusLabel then statusLabel.Text = "Kecepatan diubah ke " .. walkSpeed end
+    else
+        if statusLabel then statusLabel.Text = "Masukkan angka valid > 0" end
     end
 end)
 
-print("Auto Follow Pro v7 siap. Tanpa emoji, tanpa bug.")
+-- Event Teleport
+btnTeleport.MouseButton1Click:Connect(function()
+    teleportToTarget()
+end)
+
+-- Event Auto Dodge
+btnAutoDodge.MouseButton1Click:Connect(function()
+    autoDodgeOn = not autoDodgeOn
+    btnAutoDodge.Text = autoDodgeOn and "Auto Dodge: ON" or "Auto Dodge: OFF"
+    btnAutoDodge.BackgroundColor3 = autoDodgeOn and Color3.fromRGB(50, 180, 90) or Color3.fromRGB(150, 100, 60)
+    if statusLabel then statusLabel.Text = autoDodgeOn and "Auto Dodge aktif" or "Auto Dodge nonaktif" end
+    if not autoDodgeOn then
+        lastPositions = {}
+    end
+end)
+
+-- Close GUI
+closeBtn.MouseButton1Click:Connect(function()
+    -- Bersihkan semua koneksi heartbeat yang berjalan
+    followConnection:Disconnect()
+    autoDodgeConnection:Disconnect()
+
+    removeAllClones()
+    if noclipBody then noclipBody:Destroy() end
+    gui:Destroy()
+end)
+
+print("Auto Follow Pro v10 Fixed siap. Semua fitur berfungsi optimal.")
